@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<style>
+div.tooltip {
+	position: absolute;
+	text-align: centre;
+	width: 100px;
+	height: 28px;
+	padding: 2px;
+	font: 12px sans-serif;
+	background: lightsteelblue;
+	border: 0px;
+	border-radius: 8px;
+	pointer-events: none;
+}
+
+</style>
+<html>
+	<head>
+		<script src="http://d3js.org/d3.v2.min.js"></script>
+		<script src="http://d3js.org/d3-color.v1.min.js"></script>
+		<script src="http://d3js.org/d3-interpolate.v1.min.js"></script>
+		<script src="http://d3js.org/d3-scale-chromatic.v1.min.js"></script>
+		<style type="text/css">
+		#arrow{
+			stroke-width:1;
+			stroke-dasharray:0;
+		}
+		</style>
+	</head>
+
+<body>
+<h2>Contents of SBML file:</h2>
+
+<button type="button" onclick="loadXMLDoc()">
+Load SBML file currently hardcoded </button>
+
+<p id="pools">Pool</p>
+<p id="reacs">Reac</p>
+<p id="enz">Enz</p>
+<p id="mmenz">MMEnz</p>
+<p id="groups">Groups</p>
+<p id="msgs">Msg</p>
+
+<p id="ErrMsg"> Err Msg </p>
+
+<script type="text/javascript" src="layoutSBML.js"> </script>
+
+</body>
+<html>

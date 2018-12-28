@@ -4,7 +4,7 @@
 /////////////////////////////////////////////////////////////////
 
 const pixelWidth = 700;
-const pixelHeight = 700;
+const pixelHeight = 600;
 
 var cx = 500.0;
 var cy = 420.0;
@@ -18,29 +18,37 @@ const poolHeight = 1.5;
 const arrowWidth = 0.15;
 
 var objLookup = {};
+var centredGroup = "";
 
 /////////////////////////////////////////////////////////////////
 
+/**
 /// Define the class info
 function ClassInfo( name, icon, showText ) {
 		this.name = name;
 		this.icon = icon;
 }
+*/
 
-function ChemObj( name, classInfo, id, color, textfg, x, y, notes) {
+function ChemObj( name, className, id, color, textfg, x, y, notes) {
 		this.name = name;
-		this.classInfo = classInfo;
+		this.className = className;
 		this.parentObj = "";
 		this.id = id;
 		this.fg = color;
 		this.textfg = textfg;
+		this.opacity = 1;
 		this.x = x;
 		this.y = y;
+		this.dispx = x;
+		this.dispy = y;
 		this.notes = "";
+		/*
 		this.children = {};
 		this.addChild = function( childObj ) {
 			this.children[childObj.name] = childObj
 		}
+		*/
 }
 
 /// Returns a color. Arg is a numeric value 0-63 or a color name
@@ -59,7 +67,7 @@ function shadeRGBColor(color, percent) {
     return "rgb("+(Math.round((t-R)*p)+R)+","+(Math.round((t-G)*p)+G)+","+(Math.round((t-B)*p)+B)+")";
 }
 
-function makeBaseObj( xobj, anno, attr, annoName  ) {
+function makeBaseObj( className, xobj, anno, attr, annoName  ) {
 	if ( typeof anno === "undefined") {
 		throw "makeBaseObj failed, annotation not present";
 	}
@@ -76,7 +84,7 @@ function makeBaseObj( xobj, anno, attr, annoName  ) {
 		if (xnotes.length > 0 ) {
 			notes = xnotes[0].textContent;
 		}
-		return new ChemObj( name, poolClassInfo, id, bg, textfg, x,y, notes );
+		return new ChemObj( name, className, id, bg, textfg, x,y, notes );
 	} else {
 		throw "makeBaseObj failed, annotation '" + annoName + "' not known";
 	}
@@ -85,16 +93,6 @@ function makeBaseObj( xobj, anno, attr, annoName  ) {
 /////////////////////////////////////////////////////////////////
 
 function GroupObj( xgroup, anno, attr ) {
-		/*
-	try {
-		var base = makeBaseObj(xgroup, anno, attr, "moose:GroupAnnotation");
-	}
-	catch( err ) {
-		document.getElementById("ErrMsg").innerHTML = err.message + ": GroupObj: Failed to build";
-		return;
-	}
-	this.base = base;
-	*/
 	var id = attr.getNamedItem( "groups:id" ).nodeValue;
 	var name = attr.getNamedItem( "groups:name" ).nodeValue;
 
@@ -102,25 +100,38 @@ function GroupObj( xgroup, anno, attr ) {
 	var manno = anno.getElementsByTagName("moose:GroupAnnotation");
 	this.compartment = manno[0].getElementsByTagName("moose:Compartment")[0].textContent;
 	var bg = manno[0].getElementsByTagName("moose:bgColor")[0].textContent;
-	this.base = new ChemObj( name, poolClassInfo, id, convColor(bg, 0.6), "yellow", 0,0, "" );
+	this.base = new ChemObj( name, "Group", id, convColor(bg, 0.6), "yellow", 0,0, "" );
 	var members = xgroup.getElementsByTagName("groups:member");
 	this.width = 10;
 	this.height = 10;
 	this.children = [];
+	this.enzChildren = [];
+	this.assignChildParents = function() {
+		this.children = this.children.filter( function(value, idx, arr) {
+			return typeof objLookup[ value ] !== "undefined";
+		} );
+		var k;
+		for (k = 0; k < this.children.length ; k++ ) {
+			objLookup[ this.children[k] ].base.parentObj = this; 
+		}
+	}
+	this.addEnzChild = function( enzObj ) {
+		this.enzChildren.push( enzObj.base.id )
+	}
 	this.updateCoords = function() {
 		var k;
 		var x = [];
 		var y = [];
 		for (k = 0; k < this.children.length ; k++ ) {
 			var child = objLookup[ this.children[k] ]; 
-			if ( typeof child !== "undefined") {
-				x.push( child.base.x );
-				y.push( child.base.y );
-			}
+			x.push( child.base.x );
+			y.push( child.base.y );
 		}
 		if ( this.children.length > 0 ) {
 			this.base.x = Math.min( ...x ) - 0.6*poolWidth; // Another dumb syntax.
 			this.base.y = Math.min( ...y ) - poolHeight;
+			this.base.dispx = this.base.x;
+			this.base.dispy = this.base.y;
 			this.width = 0.8 * poolWidth + Math.max( ...x ) - this.base.x;
 			this.height = 2 * poolHeight + Math.max( ...y ) - this.base.y;
 		}
@@ -130,12 +141,35 @@ function GroupObj( xgroup, anno, attr ) {
 		var childId = members[k].attributes.getNamedItem( "groups:idRef" ).nodeValue;
 		this.children.push( childId );
 	}
+	
+	this.setOpacity = function( opacity ) {
+		// Even if the opacity hasn't changed, child objects may have gained
+		// or lost message links which affect their opacity. So we update
+		// all regardless.
+		if ( centredGroup == this ) { // Don't blank it
+			opacity = 1;
+		}
+		// In all the remaining cases, we go through and set opacity
+		// recursively.
+		this.base.opacity = opacity;
+		var j;
+		for ( j = 0; j < this.children.length; j++ ) {
+			child = objLookup[ this.children[j] ];
+			if ( typeof child !== "GroupObj" ) {
+		// For now let the outer loop through groups handle child groups.
+				child.base.opacity = opacity;
+			}
+		}
+		for ( j = 0; j < this.enzChildren.length; j++ ) {
+			objLookup[ this.enzChildren[j] ].base.opacity = opacity;
+		}
+	}
 }
 
 
 function PoolObj( xpool, anno, attr ) {
 	try {
-		var base = makeBaseObj( xpool, anno, attr, "moose:ModelAnnotation" );
+		var base = makeBaseObj( "Pool", xpool, anno, attr, "moose:ModelAnnotation" );
 	}
 	catch( err ) {
 		document.getElementById("ErrMsg").innerHTML = err.message + ": PoolObj: Failed to build";
@@ -207,7 +241,7 @@ function addReactantsToMsg( id, xreac, listName, msgName, fg ) {
 
 function ReacObj( xreac, anno, attr ) {
 	try {
-		var base = makeBaseObj( xreac, anno, attr, "moose:ModelAnnotation" );
+		var base = makeBaseObj( "Reac", xreac, anno, attr, "moose:ModelAnnotation" );
 	}
 	catch( err ) {
 		document.getElementById("ErrMsg").innerHTML = err.message + ": ReacObj: Failed to build: " + attr.getNamedItem("id").nodeValue;
@@ -236,7 +270,7 @@ function getEnzParent( xenz, anno ) {
 
 function EnzObj( xenz, anno, attr ) {
 	try {
-		var base = makeBaseObj( xenz, anno, attr, "moose:EnzymaticReaction" );
+		var base = makeBaseObj( "Enz", xenz, anno, attr, "moose:EnzymaticReaction" );
 	}
 	catch( err ) {
 		document.getElementById("ErrMsg").innerHTML = err.message + ": EnzObj: Failed to build";
@@ -266,14 +300,14 @@ function EnzObj( xenz, anno, attr ) {
 
 function MMEnzObj( xenz, anno, attr, id, enzPool ) {
 	try {
-		var base = makeBaseObj( xenz, anno, attr, "moose:EnzymaticReaction" );
+		var base = makeBaseObj( "MMEnz", xenz, anno, attr, "moose:EnzymaticReaction" );
 	}
 	catch( err ) {
 		document.getElementById("ErrMsg").innerHTML = err.message + ": MMEnzObj: Failed to build";
 		return;
 	}
 	this.base = base;
-	this.enzPoolId = enzPool;
+	this.enzPool = enzPool;
 	xparams = xenz.getElementsByTagName("localParameter");
 	if (xparams.length >= 2) { // There must be a way to check id
 		this.Km = xparams[0].attributes.getNamedItem("value").nodeValue;
@@ -300,16 +334,49 @@ function MsgObj( type, src, dest, stoichiometry, fg ) {
 	this.y0 = 0.0;
 	this.x1 = 0.0;
 	this.y1 = 0.0;
+	this.opacity = 1.0;
+	this.checkOpacity = function() {
+		var srcObj = objLookup[this.src];
+		var destObj = objLookup[this.dest];
+		if ( typeof srcObj.base.parentObj.base === "undefined" || typeof destObj.base.parentObj.base === "undefined" ) {
+			alert( "OMg, failed" );
+		}
+		this.opacity = 1;
+		// Note that the objects have multiple messages, so we need to 
+		// logically combine opacity, not just assign it. Initial opacity
+		// is set by group, and placeObjProxy sets to 1 if needed.
+		if ( srcObj.base.parentObj.base.opacity == 1 ) {
+			if ( destObj.base.parentObj.base.opacity == 1 ) {
+				this.dasharray = "";
+				srcObj.base.dispx = srcObj.base.x
+				srcObj.base.dispy = srcObj.base.y
+				destObj.base.dispx = destObj.base.x
+				destObj.base.dispy = destObj.base.y
+			} else { // grp of destObj is not visible
+				this.dasharray = "3, 3";
+				placeObjProxy( this.x0, this.y0, destObj );
+			}
+		} else { // Grp of srcObj is not visible
+			if ( destObj.base.parentObj.base.opacity == 1 ) {
+				this.dasharray = "3, 3";
+				placeObjProxy( this.x1, this.y1, srcObj );
+			} else { // Neither obj group is visible.
+				this.opacity = 0;
+				// Leave the opacity of the obj as it was.
+			}
+		}
+	}
+
 	this.calcTermini = function() {
 		var s = objLookup[this.src].base;
 		var d = objLookup[this.dest].base;
-		var vx = d.x - s.x;
-		var vy = d.y - s.y;
+		var vx = d.dispx - s.dispx;
+		var vy = d.dispy - s.dispy;
 		var len = Math.sqrt( vx*vx + vy*vy );
-		this.innerx0 = s.x + 0.5*poolWidth*vx/len;
-		this.y0 = s.y + 0.5*poolHeight*vy/len;
-		this.x1 = d.x - 0.5*poolWidth*vx/len;
-		this.y1 = d.y - 0.5*poolHeight*vy/len;
+		this.innerx0 = s.dispx + 0.5*poolWidth*vx/len;
+		this.y0 = s.dispy + 0.5*poolHeight*vy/len;
+		this.x1 = d.dispx - 0.5*poolWidth*vx/len;
+		this.y1 = d.dispy - 0.5*poolHeight*vy/len;
 		return this.innerx0;
 	}
 	// Algo: get x0, y0, x1, y1 for each object right off. Then the arrow
@@ -321,15 +388,36 @@ function MsgObj( type, src, dest, stoichiometry, fg ) {
 	);
 }
 
+function placeObjProxy( x, y, obj ) {
+	obj.base.opacity = 1;
+	if ( obj.base.className == "Pool" ) { // Place on left or right
+		if ( x - cx > 0 ) {
+			obj.base.dispx = cx + wx/2 - poolWidth / 2;
+		} else {
+			obj.base.dispx = cx - wx/2 + poolWidth / 2;
+		}
+		obj.base.dispy = y + poolHeight * 2 ;
+	} else { // Enz and reacs go below or above.
+		if ( y - cy > 0 ) {
+			obj.base.dispy = cy + wy/2 - poolHeight / 2;
+		} else {
+			obj.base.dispy = cy - wy/2 + poolHeight / 2;
+		}
+		obj.base.dispx = x + poolWidth / 2 ;
+	}
+}
+
 /////////////////////////////////////////////////////////////////
 
 var colorNames = ["darkmagenta", "indigo", "navy", "darkgreen", "teal", "maroon", "steelblue", "black" ]; 
 
 
+/*
 reacClassInfo = new ClassInfo( "Reac", "", false );
 poolClassInfo = new ClassInfo( "Pool", "", true );
-enzClassInfo = new ClassInfo( "Pool", "", false );
+enzClassInfo = new ClassInfo( "Enz", "", false );
 groupClassInfo = new ClassInfo( "Group", "", true );
+*/
 
 var poolData = [];
 var reacData = [];
@@ -423,7 +511,7 @@ function loadXMLDoc() {
   xmlhttp.onreadystatechange = function() {
     if (this.readyState == 4 && this.status == 200) {
       parseSBML(this);
-	  addAllObjToLookup();
+	  addAllObjToLookup(); // Also puts pools on groups.
 	  doLayout();
     }
   };
@@ -449,7 +537,7 @@ function parseSBML(xml) {
   document.getElementById("mmenz").innerHTML = txt;
   txt = "Num Groups = " + groupData.length + "<br>";
   document.getElementById("groups").innerHTML = txt;
-  txt = "Num Msgs = " + msgData.length + "<br>";
+  txt = "Num Msgs = " + msgData.length + ", visible = " + msgData.length + "<br>";
   document.getElementById("msgs").innerHTML = txt;
 }
 
@@ -461,6 +549,9 @@ function addAllObjToLookup() {
 	enzData.forEach( addObjToLookup );
 	mmEnzData.forEach( addObjToLookup );
 	groupData.forEach( addObjToLookup );
+	groupData.forEach( assignChildParents );
+	enzData.forEach( addEnzToGroup );
+	mmEnzData.forEach( addEnzToGroup );
 	groupData.forEach( updateGroupCoords );
 }
 
@@ -468,9 +559,26 @@ function addObjToLookup( obj ) {
 	objLookup[ obj.base.id ] = obj;
 }
 
+function assignChildParents( grp ) {
+	grp.assignChildParents()
+}
+
 function updateGroupCoords( grp ) {
 	grp.updateCoords()
 }
+
+function addEnzToGroup( enz ) {
+	enzPool = objLookup[enz.enzPool];
+	if ( typeof enzPool === "undefined"  ) {
+			alert( "addEnzToGroup, failed; not in objLookup" );
+	}
+	if ( typeof enzPool === "undefined" || typeof enzPool.base.parentObj.base === "undefined" ) {
+			alert( "addEnzToGroup, failed" );
+	}
+	enz.base.parentObj = enzPool.base.parentObj;
+	enz.base.parentObj.addEnzChild( enz );
+}
+
 /////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////
 // Some stuff for screen size scaling
@@ -520,6 +628,29 @@ function enzLineFunction( x, y ) {
 	return ret;
 }
 
+function zoomVisibility() {
+	var j;
+	var minR = 1e6;
+	var opacity = [];
+	for ( j = 0; j < groupData.length; j++ ) {
+		var grp = groupData[j];
+		var dx = grp.base.x + grp.width/2.0 - cx;
+		var dy = grp.base.y + grp.height/2.0 - cy;
+		var r = Math.sqrt( dx*dx + dy*dy );
+		opacity.push( 1.0 * ((r + poolWidth) < (wx + wy)/4) );
+		if ( minR > r ) {
+			minR = r;
+			centredGroup = grp;
+		}
+	}
+	for ( j = 0; j < groupData.length; j++ ) {
+		groupData[j].setOpacity( opacity[j] )
+	}
+
+	for ( j = 0; j < msgData.length; j++ ) {
+		msgData[j].checkOpacity();
+	}
+}
 
 function doLayout() {
   var svgContainer = d3.select("body")
@@ -563,7 +694,10 @@ function doLayout() {
 			.range( [ 0, pixelHeight] )
 
 		document.getElementById("ErrMsg").innerHTML = "Coords:(" + cx.toFixed(2) + "," + cy.toFixed(2) + "), window = (" + wx.toFixed(2) + "," + wy.toFixed(2) + ")";
-		
+		zoomVisibility();
+
+  		var txt = "Num Msgs = " + msgData.length + ", visible = " + msgData.length + "<br>";
+  		document.getElementById("msgs").innerHTML = txt;
 		transition(svgContainer);
 	});
 
@@ -628,7 +762,7 @@ function poolMouseOver( div, d ) {
 
 
 function redraw( svgContainer ) {
-
+  zoomVisibility(); // Update all the object opacity settings.
   var div = d3.select("body").append("div")
 	.attr( "class", "tooltip" )
 	.style( "opacity", 0);
@@ -640,16 +774,16 @@ function redraw( svgContainer ) {
 
   // var groupIcons = group.append("rect")
   var groupIcons = group
-	.attr( "x", function(d) {return xScale(d.base.x)} )
-	.attr( "y", function(d) {return yScale(d.base.y + d.height )} )
+	.attr( "x", function(d) {return xScale(d.base.dispx)} )
+	.attr( "y", function(d) {return yScale(d.base.dispy + d.height )} )
 	.attr( "width", function(d) { return xObjScale(d.width ) } )
 	.attr( "height", function(d) { return yObjScale(d.height ) } )
 	.attr( "fill", function(d) {return d.base.fg} );
 
   var groupText = gdata.enter().append( "text" )
 	.attr( "class", "groups" )
-	.attr( "x", function(d) {return xScale(d.base.x) } )
-	.attr( "y", function(d) {return yScale(d.base.y + d.height/2) } )
+	.attr( "x", function(d) {return xScale(d.base.dispx) } )
+	.attr( "y", function(d) {return yScale(d.base.dispy + d.height/2) } )
 	.attr( "font-family", "sans-serif" )
 	.attr( "font-size", function(d) { return ""+Math.round(16 + xObjScale(textScale))+"px"} )
 	.attr( "fill", function(d){return d.base.textfg} )
@@ -667,8 +801,8 @@ function redraw( svgContainer ) {
 
   // var poolIcons = pool.append("rect")
   var poolIcons = pool
-	.attr( "x", function(d) {return xScale(d.base.x - poolWidth/2)} )
-	.attr( "y", function(d) {return yScale(d.base.y + poolHeight/2)} )
+	.attr( "x", function(d) {return xScale(d.base.dispx - poolWidth/2)} )
+	.attr( "y", function(d) {return yScale(d.base.dispy + poolHeight/2)} )
 	.attr( "width", xObjScale(poolWidth) )
 	.attr( "height", yObjScale(poolHeight) )
 	.attr( "fill", function(d) {return d.base.fg} )
@@ -679,8 +813,8 @@ function redraw( svgContainer ) {
 
   var poolText = pdata.enter().append( "text" )
 	.attr( "class", "pools" )
-	.attr( "x", function(d){return xScale(d.base.x-textXoffset * d.base.name.length) } )
-	.attr( "y", function(d) {return yScale(d.base.y - 1 + poolHeight/2)} )
+	.attr( "x", function(d){return xScale(d.base.dispx-textXoffset * d.base.name.length) } )
+	.attr( "y", function(d) {return yScale(d.base.dispy - 1 + poolHeight/2)} )
 	.attr( "font-family", "sans-serif" )
 	.attr( "font-size", function(d) { return ""+Math.round(xObjScale(textScale))+"px"} )
 	.attr( "fill", function(d){return d.base.textfg} )
@@ -699,7 +833,7 @@ function redraw( svgContainer ) {
   var reac = rdata.enter().append("polyline").attr("class", "reacs");
 
   var reacIcons = reac
-	.attr( "points", function(d) {return reacLineFunction( d.base.x, d.base.y ) } )
+	.attr( "points", function(d) {return reacLineFunction( d.base.dispx, d.base.dispy ) } )
 	.attr( "stroke", function(d) {return d.base.fg} )
 	.attr( "stroke-width", "2" )
 	.attr( "fill", "none" )
@@ -724,7 +858,7 @@ function redraw( svgContainer ) {
   var enz = edata.enter().append("polyline").attr("class", "enzs");
 
   var enzIcons = enz
-	.attr( "points", function(d) {return enzLineFunction( d.base.x, d.base.y ) } )
+	.attr( "points", function(d) {return enzLineFunction( d.base.dispx, d.base.dispy ) } )
 	.attr( "stroke", function(d) {return d.base.fg} )
 	.attr( "stroke-width", "2" )
 	.attr( "fill", "none" )
@@ -754,7 +888,7 @@ function redraw( svgContainer ) {
   var mmenz = medata.enter().append("polyline").attr("class", "mmenzs");
 
   var mmenzIcons = mmenz
-	.attr( "points", function(d) {return enzLineFunction( d.base.x, d.base.y ) } )
+	.attr( "points", function(d) {return enzLineFunction( d.base.dispx, d.base.dispy ) } )
 	.attr( "stroke", function(d) {return d.base.fg} )
 	.attr( "stroke-width", "2" )
 	.attr( "fill", "none" );
@@ -776,10 +910,9 @@ function redraw( svgContainer ) {
 		.attr( "y1", function(d) {return yScale(d.y0) } )
 		.attr( "x2", function(d) {return xScale(d.x1) } )
 		.attr( "y2", function(d) {return yScale(d.y1) } )
+		.attr( "opacity", function(d) {return d.opacity} );
 	// Turns out d3 doesn't have a way to change marker color. So we need
 	// separate markers to represent each color. Stupid.
-
-  mdata.exit().remove();
 }
 /////////////////////////////////////////////////////////////////////////
 // Here we define the transitions.
@@ -789,51 +922,58 @@ function transition( svgContainer ) {
   var gdata = svgContainer.selectAll( "rect.groups" )
   gdata.transition()
 	.duration(300)
-	.attr( "x", function(d) {return xScale(d.base.x)} )
-	.attr( "y", function(d) {return yScale(d.base.y + d.height)} )
+	.attr( "x", function(d) {return xScale(d.base.dispx)} )
+	.attr( "y", function(d) {return yScale(d.base.dispy + d.height)} )
 	.attr( "width", function(d) { return xObjScale(d.width ) } )
 	.attr( "height", function(d) { return yObjScale(d.height ) } )
+	.attr( "opacity", function(d) { return d.base.opacity } )
   var gtdata = svgContainer.selectAll( "text.groups" )
   gtdata.transition()
 	.duration(300)
-	.attr( "x", function(d) {return xScale(d.base.x) } )
-	.attr( "y", function(d) {return yScale(d.base.y + d.height/2) } )
+	.attr( "x", function(d) {return xScale(d.base.dispx) } )
+	.attr( "y", function(d) {return yScale(d.base.dispy + d.height/2) } )
+	.attr( "opacity", function(d) { return d.base.opacity } )
 	.attr( "font-size", function(d) { return ""+Math.round(16 + xObjScale(textScale))+"px"} )
 
 	////////////////// Pools /////////////////////////
   var pdata = svgContainer.selectAll( "rect.pools" )
   pdata.transition()
 	.duration(300)
-	.attr( "x", function(d) {return xScale(d.base.x - poolWidth/2)} )
-	.attr( "y", function(d) {return yScale(d.base.y + poolHeight/2)} )
+	.attr( "x", function(d) {return xScale(d.base.dispx - poolWidth/2)} )
+	.attr( "y", function(d) {return yScale(d.base.dispy + poolHeight/2)} )
+	.attr( "opacity", function(d) { return d.base.opacity } )
 	.attr( "width", xObjScale(poolWidth) )
 	.attr( "height", yObjScale(poolHeight) );
 
   var tdata = svgContainer.selectAll( "text.pools" )
   tdata.transition()
 	.duration(300)
-	.attr( "x", function(d){return xScale(d.base.x-textXoffset * d.base.name.length) } )
-	.attr( "y", function(d) {return yScale(d.base.y - 1 + poolHeight/2)} )
+	.attr( "x", function(d){return xScale(d.base.dispx-textXoffset * d.base.name.length) } )
+	.attr( "y", function(d) {return yScale(d.base.dispy - 1 + poolHeight/2)} )
 	.attr( "font-size", function(d) { return ""+Math.round(xObjScale(textScale))+"px"} )
+	.attr( "opacity", function(d) { return d.base.opacity } );
 
 	////////////////// reacs /////////////////////////
   var rdata = svgContainer.selectAll( ".reacs" )
   rdata.transition()
 	.duration(300)
-	.attr( "points", function(d) {return reacLineFunction( d.base.x, d.base.y ) } )
+	.attr( "opacity", function(d) {return d.base.opacity} )
+	.attr( "points", function(d) {return reacLineFunction( d.base.dispx, d.base.dispy ) } )
 
 	////////////////// enzymes /////////////////////////
   var edata = svgContainer.selectAll( ".enzs" )
   edata.transition()
 	.duration(300)
-	.attr( "points", function(d) {return enzLineFunction( d.base.x, d.base.y ) } )
+	.attr( "opacity", function(d) {return d.base.opacity} )
+	.attr( "points", function(d) {return enzLineFunction( d.base.dispx, d.base.dispy ) } )
 
 
 	////////////////// MM enzymes /////////////////////////
   var medata = svgContainer.selectAll( ".mmenzs" )
   medata.transition()
 	.duration(300)
-	.attr( "points", function(d) {return enzLineFunction( d.base.x, d.base.y ) } )
+	.attr( "opacity", function(d) {return d.base.opacity} )
+	.attr( "points", function(d) {return enzLineFunction( d.base.dispx, d.base.dispy ) } )
 
 	////////////////// Messages /////////////////////////
   var mdata = svgContainer.selectAll( "line" )
@@ -843,6 +983,8 @@ function transition( svgContainer ) {
 		.attr( "y1", function(d) {return yScale(d.y0) } )
 		.attr( "x2", function(d) {return xScale(d.x1) } )
 		.attr( "y2", function(d) {return yScale(d.y1) } )
-		.attr( "stroke-width", function(d) { return Math.round( xObjScale(arrowWidth) ) } )
+		.attr( "opacity", function(d) {return d.opacity} )
+		.attr( "stroke-dasharray", function(d) {return d.dasharray} )
+		.attr( "stroke-width", function(d) { return Math.round( xObjScale(arrowWidth) ) } );
 }
 /////////////////////////////////////////////////////////////////////////

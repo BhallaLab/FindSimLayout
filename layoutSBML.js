@@ -15,10 +15,22 @@ const textXoffset = 0.3;
 const textScale = 1.0;
 const poolWidth = 6.0;
 const poolHeight = 1.5;
-const arrowWidth = 0.15;
+const arrowWidth = 0.25;
+const slotXspacing = 10.0;
+const reacMsgColor = "green";
 
 var objLookup = {};
 var centredGroup = "";
+
+var poolData = [];
+var reacData = [];
+var enzData = [];
+var mmEnzData = [];
+var chanData = [];
+var groupData = [];
+var msgData = [];
+var poolProxies = [];
+var reacProxies = [];
 
 /////////////////////////////////////////////////////////////////
 
@@ -42,6 +54,7 @@ function ChemObj( name, className, id, color, textfg, x, y, notes) {
 		this.y = y;
 		this.dispx = x;
 		this.dispy = y;
+		this.ndisp = 1;
 		this.notes = "";
 		/*
 		this.children = {};
@@ -152,20 +165,51 @@ function GroupObj( xgroup, anno, attr ) {
 		// In all the remaining cases, we go through and set opacity
 		// recursively.
 		this.base.opacity = opacity;
+		this.setChildOpacity( this.children );
+		this.setChildOpacity( this.enzChildren );
+	}
+
+	this.setChildOpacity = function( children ) {
 		var j;
-		for ( j = 0; j < this.children.length; j++ ) {
-			child = objLookup[ this.children[j] ];
+		for ( j = 0; j < children.length; j++ ) {
+			child = objLookup[ children[j] ];
 			if ( typeof child !== "GroupObj" ) {
-		// For now let the outer loop through groups handle child groups.
-				child.base.opacity = opacity;
+			// Let the outer loop through groups handle child groups.
+				child.base.opacity = this.base.opacity;
+				child.base.dispx = 0;
+				child.base.dispy = 0;
+				child.base.ndisp = 0;
 			}
 		}
-		for ( j = 0; j < this.enzChildren.length; j++ ) {
-			objLookup[ this.enzChildren[j] ].base.opacity = opacity;
+	}
+
+	this.computeProxyLayout = function() {
+		// for now a dummy function, just averages out the coords.
+		computeGroupChildLayout( this.children );
+		computeGroupChildLayout( this.enzChildren );
+	}
+}
+
+function computeGroupChildLayout( children ) {
+	var j;
+	for ( j = 0; j < children.length; j++ ) {
+		child = objLookup[ children[j] ];
+		if ( child.base.ndisp > 0 ) {
+			child.base.dispx /= child.base.ndisp;
+			child.base.dispy /= child.base.ndisp;
+			if ( child.base.dispy > cy ) {
+				poolProxies.push( child );
+			} else {
+				reacProxies.push( child );
+			}
+		} else {
+			child.base.dispx = child.base.x;
+			child.base.dispy = child.base.y;
 		}
 	}
 }
 
+/////////////////////////////////////////////////////////
 
 function PoolObj( xpool, anno, attr ) {
 	try {
@@ -182,6 +226,8 @@ function PoolObj( xpool, anno, attr ) {
 	this.diffConst = manno[0].getElementsByTagName("moose:diffConstant")[0].textContent;
 	this.motorConst = manno[0].getElementsByTagName("moose:motorConstant")[0].textContent;
 }
+
+/////////////////////////////////////////////////////////
 
 function addEnzSubToMsg( id, xenz, enzPool, fg ) {
 	var xlist = xenz.getElementsByTagName( "listOfReactants" );
@@ -239,6 +285,8 @@ function addReactantsToMsg( id, xreac, listName, msgName, fg ) {
 	return enzPa;
 }
 
+/////////////////////////////////////////////////////////
+
 function ReacObj( xreac, anno, attr ) {
 	try {
 		var base = makeBaseObj( "Reac", xreac, anno, attr, "moose:ModelAnnotation" );
@@ -255,8 +303,8 @@ function ReacObj( xreac, anno, attr ) {
 			this.Kb = xparams[1].attributes.getNamedItem("value").nodeValue;
 		}
 	}
-	addReactantsToMsg( base.id, xreac, "listOfReactants", "ReacSub","lime");
-	addReactantsToMsg( base.id, xreac, "listOfProducts", "ReacPrd", "lime");
+	addReactantsToMsg( base.id, xreac, "listOfReactants", "ReacSub",reacMsgColor);
+	addReactantsToMsg( base.id, xreac, "listOfProducts", "ReacPrd", reacMsgColor);
 }
 
 function getEnzParent( xenz, anno ) {
@@ -267,6 +315,8 @@ function getEnzParent( xenz, anno ) {
 	}
 	return "";
 }
+
+/////////////////////////////////////////////////////////
 
 function EnzObj( xenz, anno, attr ) {
 	try {
@@ -297,6 +347,7 @@ function EnzObj( xenz, anno, attr ) {
 	addEnzSubToMsg( base.id, xenz, this.enzPool, "red" );
 }
 
+/////////////////////////////////////////////////////////
 
 function MMEnzObj( xenz, anno, attr, id, enzPool ) {
 	try {
@@ -317,6 +368,7 @@ function MMEnzObj( xenz, anno, attr, id, enzPool ) {
 	addReactantsToMsg( base.id, xenz, "listOfProducts", "MMEnzPrd", "blue" );
 }
 
+/////////////////////////////////////////////////////////
 
 function MsgObj( type, src, dest, stoichiometry, fg ) {
 	this.type = type;
@@ -324,18 +376,18 @@ function MsgObj( type, src, dest, stoichiometry, fg ) {
 	this.dest = dest;
 	this.fg = fg;
 	this.markerURL = "url(#redarrow)";
-	if ( fg == "green" || fg == "lime" ) {
+	if ( fg == "green" || fg == reacMsgColor ) {
 		this.markerURL = "url(#greenarrow)";
 	} else if ( fg == "blue" || fg == "cyan" ) {
 		this.markerURL = "url(#bluearrow)";
 	}
 	this.stoichiometry = stoichiometry;
-	this.innerx0 = 0.0;
+	this.x0 = 0.0;
 	this.y0 = 0.0;
 	this.x1 = 0.0;
 	this.y1 = 0.0;
 	this.opacity = 1.0;
-	this.checkOpacity = function() {
+	this.setProxyAndOpacity = function() {
 		var srcObj = objLookup[this.src];
 		var destObj = objLookup[this.dest];
 		if ( typeof srcObj.base.parentObj.base === "undefined" || typeof destObj.base.parentObj.base === "undefined" ) {
@@ -348,10 +400,6 @@ function MsgObj( type, src, dest, stoichiometry, fg ) {
 		if ( srcObj.base.parentObj.base.opacity == 1 ) {
 			if ( destObj.base.parentObj.base.opacity == 1 ) {
 				this.dasharray = "";
-				srcObj.base.dispx = srcObj.base.x
-				srcObj.base.dispy = srcObj.base.y
-				destObj.base.dispx = destObj.base.x
-				destObj.base.dispy = destObj.base.y
 			} else { // grp of destObj is not visible
 				this.dasharray = "3, 3";
 				placeObjProxy( this.x0, this.y0, destObj );
@@ -367,65 +415,51 @@ function MsgObj( type, src, dest, stoichiometry, fg ) {
 		}
 	}
 
+	this.rawTermini = function() {
+		var s = objLookup[this.src].base;
+		var d = objLookup[this.dest].base;
+		this.x0 = s.x;
+		this.y0 = s.y;
+		this.x1 = d.x;
+		this.y1 = d.y;
+	}
+
 	this.calcTermini = function() {
 		var s = objLookup[this.src].base;
 		var d = objLookup[this.dest].base;
 		var vx = d.dispx - s.dispx;
 		var vy = d.dispy - s.dispy;
 		var len = Math.sqrt( vx*vx + vy*vy );
-		this.innerx0 = s.dispx + 0.5*poolWidth*vx/len;
+		if ( len < 0.1 ) {
+			len = 1.0;
+		}
+		this.x0 = s.dispx + 0.5*poolWidth*vx/len;
 		this.y0 = s.dispy + 0.5*poolHeight*vy/len;
 		this.x1 = d.dispx - 0.5*poolWidth*vx/len;
 		this.y1 = d.dispy - 0.5*poolHeight*vy/len;
-		return this.innerx0;
+		return this.x0;
 	}
 	// Algo: get x0, y0, x1, y1 for each object right off. Then the arrow
 	// terminus is offset along the vector of the msg, by an ellipse.
 	// Put in a getter instead, so that the msgs track their ends 
 	// Remarkably filthy synatx. Challenges C++ on this.
-	Object.defineProperty( this, 'x0',
+	Object.defineProperty( this, 'calcX0',
 			{ get: function(){ return this.calcTermini();} } 
 	);
 }
 
 function placeObjProxy( x, y, obj ) {
 	obj.base.opacity = 1;
-	if ( obj.base.className == "Pool" ) { // Place on left or right
-		if ( x - cx > 0 ) {
-			obj.base.dispx = cx + wx/2 - poolWidth / 2;
-		} else {
-			obj.base.dispx = cx - wx/2 + poolWidth / 2;
-		}
-		obj.base.dispy = y + poolHeight * 2 ;
-	} else { // Enz and reacs go below or above.
-		if ( y - cy > 0 ) {
-			obj.base.dispy = cy + wy/2 - poolHeight / 2;
-		} else {
-			obj.base.dispy = cy - wy/2 + poolHeight / 2;
-		}
-		obj.base.dispx = x + poolWidth / 2 ;
+	if ( obj.base.className == "Pool" ) { // Place above
+		obj.base.dispy += cy + wy/2 - poolHeight;
+	} else { // Enz and reacs go below
+		obj.base.dispy += cy - wy/2 + poolHeight / 2;
+		// obj.base.dispy += y + poolHeight * 2 ;
 	}
+	obj.base.dispx += x + poolWidth / 2 ;
+	obj.base.ndisp++;
 }
 
-/////////////////////////////////////////////////////////////////
-
-var colorNames = ["darkmagenta", "indigo", "navy", "darkgreen", "teal", "maroon", "steelblue", "black" ]; 
-
-
-/*
-reacClassInfo = new ClassInfo( "Reac", "", false );
-poolClassInfo = new ClassInfo( "Pool", "", true );
-enzClassInfo = new ClassInfo( "Enz", "", false );
-groupClassInfo = new ClassInfo( "Group", "", true );
-*/
-
-var poolData = [];
-var reacData = [];
-var enzData = [];
-var mmEnzData = [];
-var chanData = [];
-var groupData = [];
-var msgData = [];
 
 /////////////////////////////////////////////////////////////////////////
 
@@ -456,7 +490,6 @@ function parsePools(xmlDoc) {
 
 function reacType( reac, anno, attr ) {
 	id = attr.getNamedItem("id").nodeValue;
-	// if (typeof anno.getElementsByTagName("moose:ModelAnnotation") !== "undefined" ) {
 	if ( anno.getElementsByTagName("moose:ModelAnnotation").length > 0 ) {
 		return [0, id]; // reac
 	}
@@ -646,10 +679,25 @@ function zoomVisibility() {
 	for ( j = 0; j < groupData.length; j++ ) {
 		groupData[j].setOpacity( opacity[j] )
 	}
+	
+	msgData.forEach( function( msg ) { msg.rawTermini()  } );
+	msgData.forEach( function( msg ) { msg.setProxyAndOpacity()  } );
+	poolProxies.length = 0;
+	reacProxies.length = 0;
+	groupData.forEach( function( grp ) { grp.computeProxyLayout() } );
+	spaceOut( poolProxies );
+	spaceOut( reacProxies );
+}
 
-	for ( j = 0; j < msgData.length; j++ ) {
-		msgData[j].checkOpacity();
-	}
+function spaceOut( objArray ) {
+	if ( objArray.length == 0 )
+		return;
+	objArray.sort( function( a, b ) { 
+			return a.base.dispx - b.base.dispx;
+	} );
+	var dx = (wx - poolWidth ) / objArray.length;
+	var x = cx - wx/2 + poolWidth/2 + dx/2;
+	objArray.forEach( function ( obj ) { obj.base.dispx = x; x+= dx } );
 }
 
 function doLayout() {
@@ -729,7 +777,7 @@ function doLayout() {
 	})
 	.append("path")
 		.attr("d", "M0,-5L10,0L0,5")
-		.attr("fill", "lime")
+		.attr("fill", reacMsgColor)
 		.attr("class","arrowHead");
 
   defs.append( "marker" )
@@ -772,7 +820,6 @@ function redraw( svgContainer ) {
 
   var group = gdata.enter().append("rect").attr("class", "groups" );
 
-  // var groupIcons = group.append("rect")
   var groupIcons = group
 	.attr( "x", function(d) {return xScale(d.base.dispx)} )
 	.attr( "y", function(d) {return yScale(d.base.dispy + d.height )} )
@@ -790,8 +837,6 @@ function redraw( svgContainer ) {
 	.text( function(d){return d.base.name} )
 
   gdata.exit().remove();
-		/*
-  */
 
 	////////////////////////////////
   var pdata = svgContainer.selectAll( ".pools" )
@@ -799,13 +844,14 @@ function redraw( svgContainer ) {
 
   var pool = pdata.enter().append("rect").attr("class", "pools" );
 
-  // var poolIcons = pool.append("rect")
   var poolIcons = pool
 	.attr( "x", function(d) {return xScale(d.base.dispx - poolWidth/2)} )
 	.attr( "y", function(d) {return yScale(d.base.dispy + poolHeight/2)} )
 	.attr( "width", xObjScale(poolWidth) )
 	.attr( "height", yObjScale(poolHeight) )
 	.attr( "fill", function(d) {return d.base.fg} )
+	.attr( "stroke", "black" )
+	.attr( "stroke-width", "1" )
 	.on( "mouseover", function(d) { poolMouseOver( div, d ) } )
 	.on( "mouseout", function(d) {
 		div.transition().duration(500).style( "opacity", 0.0);
@@ -859,9 +905,10 @@ function redraw( svgContainer ) {
 
   var enzIcons = enz
 	.attr( "points", function(d) {return enzLineFunction( d.base.dispx, d.base.dispy ) } )
-	.attr( "stroke", function(d) {return d.base.fg} )
-	.attr( "stroke-width", "2" )
-	.attr( "fill", "none" )
+	//.attr( "stroke", function(d) {return d.base.fg} )
+	.attr( "stroke", "black" )
+	.attr( "stroke-width", "1" )
+	.attr( "fill", function(d) {return d.base.fg} )
 	.on( "mouseover", function(d) { 
 		div.transition()
 			.duration(200)
@@ -906,7 +953,7 @@ function redraw( svgContainer ) {
 		.attr( "stroke-width", function(d) { return xObjScale(arrowWidth)} )
 		// .attr( "marker-end", "url(#arrow)" )
 		.attr( "marker-end", function(d) {return d.markerURL } )
-		.attr( "x1", function(d) {return xScale(d.x0) } )
+		.attr( "x1", function(d) {return xScale(d.calcX0) } )
 		.attr( "y1", function(d) {return yScale(d.y0) } )
 		.attr( "x2", function(d) {return xScale(d.x1) } )
 		.attr( "y2", function(d) {return yScale(d.y1) } )
@@ -979,7 +1026,7 @@ function transition( svgContainer ) {
   var mdata = svgContainer.selectAll( "line" )
   mdata.transition()
 	.duration(300)
-		.attr( "x1", function(d) {return xScale(d.x0) } )
+		.attr( "x1", function(d) {return xScale(d.calcX0) } )
 		.attr( "y1", function(d) {return yScale(d.y0) } )
 		.attr( "x2", function(d) {return xScale(d.x1) } )
 		.attr( "y2", function(d) {return yScale(d.y1) } )

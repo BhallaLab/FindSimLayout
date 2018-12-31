@@ -6,10 +6,12 @@
 const pixelWidth = 700;
 const pixelHeight = 600;
 
+var svgContainer = "";
 var cx = 500.0;
 var cy = 420.0;
 var wx = 150;
 var wy = 150;
+var isZoomedOut = true;
 
 const textXoffset = 0.3;
 const textScale = 1.0;
@@ -18,6 +20,9 @@ const poolHeight = 1.5;
 const arrowWidth = 0.25;
 const slotXspacing = 10.0;
 const reacMsgColor = "green";
+const groupFillColor = "cornsilk";
+const groupTextColor = "darkblue";
+
 
 var objLookup = {};
 var centredGroup = "";
@@ -31,6 +36,26 @@ var groupData = [];
 var msgData = [];
 var poolProxies = [];
 var reacProxies = [];
+
+/////////////////////////////////////////////////////////////////////////
+// Some stuff for screen size scaling
+/////////////////////////////////////////////////////////////////////////
+
+var xScale = d3.scale.linear()
+	.domain( [cx - wx/2, cx + wx/2] )
+	.range( [0, pixelWidth] )
+
+var yScale = d3.scale.linear()
+	.domain( [ cy + wy/2, cy - wy/2] )
+	.range( [ 0, pixelHeight] )
+
+var xObjScale = d3.scale.linear()
+	.domain( [ 0, wx ] )
+	.range( [ 0, pixelWidth] )
+
+var yObjScale = d3.scale.linear()
+	.domain( [ 0, wy ] )
+	.range( [ 0, pixelHeight] )
 
 /////////////////////////////////////////////////////////////////
 
@@ -187,6 +212,21 @@ function GroupObj( xgroup, anno, attr ) {
 		// for now a dummy function, just averages out the coords.
 		computeGroupChildLayout( this.children );
 		computeGroupChildLayout( this.enzChildren );
+	}
+	this.zoomInOut = function() {
+	// Toggles between zoom for current group, and for entire frame.
+		if ( isZoomedOut ) {
+			wx = 1.1 * this.width + 4 * poolWidth;
+			wy = 1.2 * this.height + 4 * poolHeight;
+			cx = this.base.x + wx/2 - 3 * poolWidth;
+			cy = this.base.y + wy/2 - 4 * poolHeight;
+			isZoomedOut = false;
+			setDisplayScales();
+		} else {
+			zoomToEntireModel();
+		}
+		zoomVisibility();
+		transition(svgContainer);
 	}
 }
 
@@ -539,17 +579,59 @@ function parseReacs(xmlDoc) {
 }
 /////////////////////////////////////////////////////////////////////////
 
+function clearAllArrays() {
+	objLookup = {}; // Lengthy stack exchange discussion, here I leave it
+			// to the tender mercies of the garbage collector to clean.
+	centredGroup = "";
+	poolData.length = 0;
+	reacData.length = 0;
+	enzData.length = 0;
+	mmEnzData.length = 0;
+	chanData.length = 0;
+	groupData.length = 0;
+	msgData.length = 0;
+	poolProxies.length = 0;
+	reacProxies.length = 0;
+}
+
+function clearSvgContainer( svgContainer ) {
+	svgContainer.selectAll("rect").remove();
+	svgContainer.selectAll("text").remove();
+	svgContainer.selectAll("polyline").remove();
+	svgContainer.selectAll("line").remove();
+}
+
 function loadXMLDoc() {
-  var xmlhttp = new XMLHttpRequest();
-  xmlhttp.onreadystatechange = function() {
-    if (this.readyState == 4 && this.status == 200) {
-      parseSBML(this);
-	  addAllObjToLookup(); // Also puts pools on groups.
-	  doLayout();
-    }
-  };
-  xmlhttp.open("GET", "plastic12.xml", true);
-  xmlhttp.send();
+	var fobj = document.getElementById("sbmlFile");
+	var txt = "Select a file";
+	if ( 'files' in fobj ) {
+		if (fobj.files.length > 0) {
+			clearAllArrays();
+			fn = fobj.files[0].name;
+			txt = "Displaying: " + fn;
+			var extn = txt.split('.').pop().toLowerCase();
+			if (extn == "xml" || extn == "sbml" ) {
+  				var xmlhttp = new XMLHttpRequest();
+  				xmlhttp.onreadystatechange = function() {
+    				if (this.readyState == 4 && this.status == 200) {
+      					parseSBML(this);
+	  					addAllObjToLookup(); // Also puts pools on groups.
+						if ( svgContainer == "" ){
+	  						svgContainer = doLayout();
+						} else {
+							clearSvgContainer( svgContainer );
+						}
+						redraw( svgContainer );
+    				}
+  				};
+  				xmlhttp.open("GET", fn, true);
+  				xmlhttp.send();
+			} else {
+				txt = "Please select an SBML file.";
+			}
+		}
+	}
+	document.getElementById( "fname" ).innerHTML = txt;
 }
 
 
@@ -574,7 +656,26 @@ function parseSBML(xml) {
   document.getElementById("msgs").innerHTML = txt;
 }
 
+function zoomToEntireModel() {
+	cx = cy = -1e6;
+	wx = wy = 1e6;
+	for ( const key in objLookup ) {
+		var b = objLookup[key].base;
+		if ( cx < b.x ) cx = b.x;
+		if ( cy < b.y ) cy = b.y;
+		if ( wx > b.x ) wx = b.x;
+		if ( wy > b.y ) wy = b.y;
+	}
+	var temp = cx - wx; // Get the width;
+	cx = (cx + wx) / 2.0;
+	wx = 1.4*temp + 2 * poolWidth;
+	temp = cy - wy; // Get the height;
+	cy = (cy + wy) / 2.0;
+	wy = 1.4*temp + 2 * poolHeight;
+	isZoomedOut = true;
 
+	setDisplayScales();
+}
 
 function addAllObjToLookup() {
 	poolData.forEach( addObjToLookup );
@@ -582,6 +683,8 @@ function addAllObjToLookup() {
 	enzData.forEach( addObjToLookup );
 	mmEnzData.forEach( addObjToLookup );
 	groupData.forEach( addObjToLookup );
+	zoomToEntireModel();
+
 	groupData.forEach( assignChildParents );
 	enzData.forEach( addEnzToGroup );
 	mmEnzData.forEach( addEnzToGroup );
@@ -613,25 +716,6 @@ function addEnzToGroup( enz ) {
 }
 
 /////////////////////////////////////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////////
-// Some stuff for screen size scaling
-/////////////////////////////////////////////////////////////////////////
-
-var xScale = d3.scale.linear()
-	.domain( [cx - wx/2, cx + wx/2] )
-	.range( [0, pixelWidth] )
-
-var yScale = d3.scale.linear()
-	.domain( [ cy + wy/2, cy - wy/2] )
-	.range( [ 0, pixelHeight] )
-
-var xObjScale = d3.scale.linear()
-	.domain( [ 0, wx ] )
-	.range( [ 0, pixelWidth] )
-
-var yObjScale = d3.scale.linear()
-	.domain( [ 0, wy ] )
-	.range( [ 0, pixelHeight] )
 
 /////////////////////////////////////////////////////////////////////////
 // Making the svg stuff for web page
@@ -646,7 +730,7 @@ function reacLineFunction( x, y ) {
 	// console.log(ret);
 	// tottxt += ret + "<br>";
 	return ret;
- }
+}
 
 function enzLineFunction( x, y ) {
 	var ret =
@@ -700,6 +784,21 @@ function spaceOut( objArray ) {
 	objArray.forEach( function ( obj ) { obj.base.dispx = x; x+= dx } );
 }
 
+function setDisplayScales() {
+	xScale = d3.scale.linear()
+		.domain( [cx - wx/2, cx + wx/2] )
+		.range( [0, pixelWidth] )
+	yScale = d3.scale.linear()
+		.domain( [ cy + wy/2, cy - wy/2] )
+		.range( [ 0, pixelHeight] )
+	xObjScale = d3.scale.linear()
+		.domain( [ 0, wx ] )
+		.range( [ 0, pixelWidth] )
+	yObjScale = d3.scale.linear()
+		.domain( [ 0, wy ] )
+		.range( [ 0, pixelHeight] )
+}
+
 function doLayout() {
   var svgContainer = d3.select("body")
 	.append("svg")
@@ -726,20 +825,8 @@ function doLayout() {
 			wx /= 1.1;
 			wy /= 1.1;
 		}
-		xScale = d3.scale.linear()
-			.domain( [cx - wx/2, cx + wx/2] )
-			.range( [0, pixelWidth] )
-		yScale = d3.scale.linear()
-			.domain( [ cy + wy/2, cy - wy/2] )
-			.range( [ 0, pixelHeight] )
-
-		xObjScale = d3.scale.linear()
-			.domain( [ 0, wx ] )
-			.range( [ 0, pixelWidth] )
-
-		yObjScale = d3.scale.linear()
-			.domain( [ 0, wy ] )
-			.range( [ 0, pixelHeight] )
+		isZoomedOut = false;
+		setDisplayScales();
 
 		document.getElementById("ErrMsg").innerHTML = "Coords:(" + cx.toFixed(2) + "," + cy.toFixed(2) + "), window = (" + wx.toFixed(2) + "," + wy.toFixed(2) + ")";
 		zoomVisibility();
@@ -795,7 +882,7 @@ function doLayout() {
 		.attr("fill", "blue")
 		.attr("class","arrowHead");
 	
-  redraw( svgContainer );
+	return svgContainer;
 }
 
 ////////////////////////////////////////////////////////////////////////
@@ -825,7 +912,10 @@ function redraw( svgContainer ) {
 	.attr( "y", function(d) {return yScale(d.base.dispy + d.height )} )
 	.attr( "width", function(d) { return xObjScale(d.width ) } )
 	.attr( "height", function(d) { return yObjScale(d.height ) } )
-	.attr( "fill", function(d) {return d.base.fg} );
+	.attr( "stroke", function(d) {return d.base.fg} )
+	.attr( "stroke-width", "2" )
+	.attr( "fill", groupFillColor )
+	.on( "dblclick", function(d) { d.zoomInOut() } );
 
   var groupText = gdata.enter().append( "text" )
 	.attr( "class", "groups" )
@@ -833,8 +923,9 @@ function redraw( svgContainer ) {
 	.attr( "y", function(d) {return yScale(d.base.dispy + d.height/2) } )
 	.attr( "font-family", "sans-serif" )
 	.attr( "font-size", function(d) { return ""+Math.round(16 + xObjScale(textScale))+"px"} )
-	.attr( "fill", function(d){return d.base.textfg} )
+	.attr( "fill", groupTextColor )
 	.text( function(d){return d.base.name} )
+	.on( "dblclick", function(d) { d.zoomInOut() } );
 
   gdata.exit().remove();
 
@@ -880,7 +971,7 @@ function redraw( svgContainer ) {
 
   var reacIcons = reac
 	.attr( "points", function(d) {return reacLineFunction( d.base.dispx, d.base.dispy ) } )
-	.attr( "stroke", function(d) {return d.base.fg} )
+	.attr( "stroke", function(d) { return d.base.parentObj.base.fg  }  )
 	.attr( "stroke-width", "2" )
 	.attr( "fill", "none" )
 	.on( "mouseover", function(d) { 
@@ -973,14 +1064,14 @@ function transition( svgContainer ) {
 	.attr( "y", function(d) {return yScale(d.base.dispy + d.height)} )
 	.attr( "width", function(d) { return xObjScale(d.width ) } )
 	.attr( "height", function(d) { return yObjScale(d.height ) } )
-	.attr( "opacity", function(d) { return d.base.opacity } )
+	.attr( "opacity", function(d) { return d.base.opacity } );
   var gtdata = svgContainer.selectAll( "text.groups" )
   gtdata.transition()
 	.duration(300)
 	.attr( "x", function(d) {return xScale(d.base.dispx) } )
 	.attr( "y", function(d) {return yScale(d.base.dispy + d.height/2) } )
 	.attr( "opacity", function(d) { return d.base.opacity } )
-	.attr( "font-size", function(d) { return ""+Math.round(16 + xObjScale(textScale))+"px"} )
+	.attr( "font-size", function(d) { return ""+Math.round(16 + xObjScale(textScale))+"px"} );
 
 	////////////////// Pools /////////////////////////
   var pdata = svgContainer.selectAll( "rect.pools" )

@@ -30,10 +30,10 @@ div.tooltip {
 	</head>
 
 <body>
-<h2>Contents of SBML file:</h2>
+<h2> Example to read and display layout of SBML file</h2>
 
-<button type="button" onclick="loadXMLDoc()">
-Load SBML file currently hardcoded </button>
+<input class="inputFile" type="file" id="sbmlFile" size="50" onchange="loadXMLDoc()">
+<p id="fname">Select an SBML file</p>
 
 <p id="pools">Pool</p>
 <p id="reacs">Reac</p>

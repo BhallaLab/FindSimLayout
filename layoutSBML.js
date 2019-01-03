@@ -12,13 +12,13 @@ var cy = 420.0;
 var wx = 150;
 var wy = 150;
 var isZoomedOut = true;
+var showProxies = false; // flag: decides if system should show proxies.
 
-const textXoffset = 0.3;
-const textScale = 1.0;
-const poolWidth = 6.0;
-const poolHeight = 1.5;
-const arrowWidth = 0.25;
-const slotXspacing = 10.0;
+var textScale = 1.0;
+var poolWidth = 6.0;
+var poolHeight = 1.5;
+var arrowWidth = 0.25;
+var textXoffset = 0.3;
 const reacMsgColor = "green";
 const groupFillColor = "cornsilk";
 const groupTextColor = "darkblue";
@@ -37,9 +37,20 @@ var msgData = [];
 var poolProxies = [];
 var reacProxies = [];
 
+var concUnits = "uM";
+const concUnitScale = { "M": 1e-3, "mM": 1.0, "uM": 1000.0, "nM":1e6 };
+
 /////////////////////////////////////////////////////////////////////////
 // Some stuff for screen size scaling
 /////////////////////////////////////////////////////////////////////////
+
+function scaleFontsEtc( factor ) {
+	textScale *= factor;
+	poolWidth *= factor;
+	poolHeight *= factor;
+	arrowWidth *= factor;
+	textXoffset *= factor;
+}
 
 var xScale = d3.scale.linear()
 	.domain( [cx - wx/2, cx + wx/2] )
@@ -58,14 +69,6 @@ var yObjScale = d3.scale.linear()
 	.range( [ 0, pixelHeight] )
 
 /////////////////////////////////////////////////////////////////
-
-/**
-/// Define the class info
-function ClassInfo( name, icon, showText ) {
-		this.name = name;
-		this.icon = icon;
-}
-*/
 
 function ChemObj( name, className, id, color, textfg, x, y, notes) {
 		this.name = name;
@@ -181,14 +184,13 @@ function GroupObj( xgroup, anno, attr ) {
 	}
 	
 	this.setOpacity = function( opacity ) {
-		// Even if the opacity hasn't changed, child objects may have gained
+		// Even if opacity hasn't changed, child objects may have gained
 		// or lost message links which affect their opacity. So we update
 		// all regardless.
 		if ( centredGroup == this ) { // Don't blank it
 			opacity = 1;
 		}
-		// In all the remaining cases, we go through and set opacity
-		// recursively.
+		// In all remaining cases, go through and set opacity recursively.
 		this.base.opacity = opacity;
 		this.setChildOpacity( this.children );
 		this.setChildOpacity( this.enzChildren );
@@ -260,7 +262,7 @@ function PoolObj( xpool, anno, attr ) {
 		return;
 	}
 	this.base = base;
-	this.CoInit = 1000*parseFloat(attr.getNamedItem("initialConcentration").nodeValue);
+	this.CoInit = concUnitScale[concUnits]*parseFloat(attr.getNamedItem("initialConcentration").nodeValue);
 	this.isBuffered = attr.getNamedItem("constant").nodeValue;
 	var manno = anno.getElementsByTagName("moose:ModelAnnotation");
 	this.diffConst = manno[0].getElementsByTagName("moose:diffConstant")[0].textContent;
@@ -272,6 +274,7 @@ function PoolObj( xpool, anno, attr ) {
 function addEnzSubToMsg( id, xenz, enzPool, fg ) {
 	var xlist = xenz.getElementsByTagName( "listOfReactants" );
 	var enzPa = "";
+	var myMsgList = [];
 	if (xlist.length > 0 ) {
 		var xpool = xlist[0].getElementsByTagName( "speciesReference" );
 		var k;
@@ -280,15 +283,19 @@ function addEnzSubToMsg( id, xenz, enzPool, fg ) {
 			var pool = sattr.species.nodeValue;
 			if (pool != enzPool ) { // Avoid parent pool of enzyme
 				var numpool=sattr.getNamedItem( "stoichiometry" ).nodeValue;
-				msgData.push( new MsgObj( "EnzSub", pool,  id,  numpool, fg ) );
+				var msg = new MsgObj( "EnzSub", pool,  id,  numpool, fg );
+				msgData.push( msg );
+				myMsgList.push( msg );
 			}
 		}
 	}
+	return myMsgList;
 }
 
 function addEnzPrdToMsg( id, xenz, enzPool, fg ) {
 	var xlist = xenz.getElementsByTagName( "listOfProducts" );
 	var enzPa = "";
+	var myMsgList = [];
 	if (xlist.length > 0 ) {
 		var xpool = xlist[0].getElementsByTagName( "speciesReference" );
 		var k;
@@ -297,15 +304,18 @@ function addEnzPrdToMsg( id, xenz, enzPool, fg ) {
 			var pool = sattr.species.nodeValue;
 			if (pool != enzPool ) { // Avoid parent molecule of enzyme
 				var numpool=sattr.getNamedItem( "stoichiometry" ).nodeValue;
-				msgData.push( new MsgObj( "EnzPrd", id,  pool,  numpool, fg ) );
+				var msg = new MsgObj( "EnzPrd", id,  pool,  numpool, fg );
+				msgData.push( msg );
+				myMsgList.push( msg );
 			}
 		}
 	}
+	return myMsgList;
 }
 
 function addReactantsToMsg( id, xreac, listName, msgName, fg ) {
 	var xlist = xreac.getElementsByTagName( listName );
-	var enzPa = "";
+	var myMsgList = [];
 	if (xlist.length > 0 ) {
 		var startIdx = 0;
 		var xpool = xlist[0].getElementsByTagName( "speciesReference" );
@@ -315,14 +325,17 @@ function addReactantsToMsg( id, xreac, listName, msgName, fg ) {
 			// pool = sattr.getNamedItem( "species" ).nodeValue;
 			var pool = sattr.species.nodeValue;
 			var numpool = sattr.getNamedItem( "stoichiometry" ).nodeValue;
+			var msg;
 			if ( msgName.indexOf( "Prd" ) != -1 ) {
-				msgData.push( new MsgObj( msgName, id,  pool,  numpool, fg ) );
+				msg = new MsgObj( msgName, id,  pool,  numpool, fg );
 			} else {
-				msgData.push( new MsgObj( msgName, pool,  id,  numpool, fg ) );
+				msg = new MsgObj( msgName, pool,  id,  numpool, fg );
 			}
+			msgData.push( msg );
+			myMsgList.push( msg );
 		}
 	}
-	return enzPa;
+	return myMsgList;
 }
 
 /////////////////////////////////////////////////////////
@@ -337,14 +350,17 @@ function ReacObj( xreac, anno, attr ) {
 	}
 	this.base = base;
 	xparams = xreac.getElementsByTagName("localParameter");
-	if (xparams.length > 0) {
-		this.Kf = xparams[0].attributes.getNamedItem("value").nodeValue;
+	if (xparams.length > 0) { // Here we compute Kf and Kb for SI units
+		this.innerKf = xparams[0].attributes.getNamedItem("value").nodeValue;
 		if (xparams.length > 1) {
-			this.Kb = xparams[1].attributes.getNamedItem("value").nodeValue;
+			this.innerKb = xparams[1].attributes.getNamedItem("value").nodeValue;
 		}
 	}
-	addReactantsToMsg( base.id, xreac, "listOfReactants", "ReacSub",reacMsgColor);
-	addReactantsToMsg( base.id, xreac, "listOfProducts", "ReacPrd", reacMsgColor);
+	this.subs = addReactantsToMsg( base.id, xreac, "listOfReactants", "ReacSub",reacMsgColor);
+	this.prds = addReactantsToMsg( base.id, xreac, "listOfProducts", "ReacPrd", reacMsgColor);
+	var cs = concUnitScale[ concUnits ];
+	this.Kf = this.innerKf * Math.pow( cs, 1-this.subs.length );
+	this.Kb = this.innerKb * Math.pow( cs, 1-this.prds.length );
 }
 
 function getEnzParent( xenz, anno ) {
@@ -369,6 +385,7 @@ function EnzObj( xenz, anno, attr ) {
 	this.base = base;
 	var xparams = xenz.getElementsByTagName("localParameter");
 	this.Km = 0.0;
+	this.kcat = 0.0;
 	this.enzPool = getEnzParent(xenz, anno );
 	if (xparams.length > 0) {
 		this.K1 = parseFloat( xparams[0].attributes.getNamedItem("value").nodeValue );
@@ -376,15 +393,22 @@ function EnzObj( xenz, anno, attr ) {
 			this.K2 = parseFloat( xparams[1].attributes.getNamedItem("value").nodeValue );
 		}
 	}
+	this.prds = [];
 	this.addProduct = function( xenz, anno, attr ) {
 		var xparams = xenz.getElementsByTagName("localParameter");
 		if (xparams.length > 0) {
 			this.kcat = parseFloat( xparams[0].attributes.getNamedItem("value").nodeValue );
-			this.Km = (this.kcat + this.K2)/this.K1;
 		}
-		addEnzPrdToMsg( base.id, xenz, this.enzPool, "red");
+		this.prds = addEnzPrdToMsg( base.id, xenz, this.enzPool, "red");
+		this.Km = this.calcKm( concUnits );
 	}
-	addEnzSubToMsg( base.id, xenz, this.enzPool, "red" );
+	this.subs = addEnzSubToMsg( base.id, xenz, this.enzPool, "red" );
+	
+	this.calcKm = function( concUnits ) {
+		var scale = concUnitScale[ concUnits ];
+		var innerKm = (this.kcat+ this.K2)/this.K1;
+		return innerKm * Math.pow( scale, this.subs.length );
+	}
 }
 
 /////////////////////////////////////////////////////////
@@ -399,13 +423,16 @@ function MMEnzObj( xenz, anno, attr, id, enzPool ) {
 	}
 	this.base = base;
 	this.enzPool = enzPool;
+	this.kcat = 0.0;
+	this.innerKm = 1.0;
 	xparams = xenz.getElementsByTagName("localParameter");
 	if (xparams.length >= 2) { // There must be a way to check id
-		this.Km = xparams[0].attributes.getNamedItem("value").nodeValue;
-		this.kcat = xparams[1].attributes.getNamedItem("value").nodeValue;
+		this.innerKm = parseFloat( xparams[0].attributes.getNamedItem("value").nodeValue );
+		this.kcat = parseFloat( xparams[1].attributes.getNamedItem("value").nodeValue );
 	}
-	addReactantsToMsg( base.id, xenz, "listOfReactants", "MMEnzSub", "blue" );
-	addReactantsToMsg( base.id, xenz, "listOfProducts", "MMEnzPrd", "blue" );
+	this.subs = addReactantsToMsg( base.id, xenz, "listOfReactants", "MMEnzSub", "blue" );
+	this.prds = addReactantsToMsg( base.id, xenz, "listOfProducts", "MMEnzPrd", "blue" );
+	this.Km = this.innerKm * Math.pow( concUnitScale[ concUnits ], this.subs.length );
 }
 
 /////////////////////////////////////////////////////////
@@ -433,19 +460,20 @@ function MsgObj( type, src, dest, stoichiometry, fg ) {
 		if ( typeof srcObj.base.parentObj.base === "undefined" || typeof destObj.base.parentObj.base === "undefined" ) {
 			alert( "OMg, failed" );
 		}
-		this.opacity = 1;
+		this.opacity = showProxies ? 1.0: 0.0;
 		// Note that the objects have multiple messages, so we need to 
 		// logically combine opacity, not just assign it. Initial opacity
 		// is set by group, and placeObjProxy sets to 1 if needed.
 		if ( srcObj.base.parentObj.base.opacity == 1 ) {
 			if ( destObj.base.parentObj.base.opacity == 1 ) {
+				this.opacity = 1.0;
 				this.dasharray = "";
-			} else { // grp of destObj is not visible
+			} else if (showProxies) { // grp of destObj is not visible
 				this.dasharray = "3, 3";
 				placeObjProxy( this.x0, this.y0, destObj );
 			}
 		} else { // Grp of srcObj is not visible
-			if ( destObj.base.parentObj.base.opacity == 1 ) {
+			if (showProxies && destObj.base.parentObj.base.opacity == 1) {
 				this.dasharray = "3, 3";
 				placeObjProxy( this.x1, this.y1, srcObj );
 			} else { // Neither obj group is visible.
@@ -494,7 +522,6 @@ function placeObjProxy( x, y, obj ) {
 		obj.base.dispy += cy + wy/2 - poolHeight;
 	} else { // Enz and reacs go below
 		obj.base.dispy += cy - wy/2 + poolHeight / 2;
-		// obj.base.dispy += y + poolHeight * 2 ;
 	}
 	obj.base.dispx += x + poolWidth / 2 ;
 	obj.base.ndisp++;
@@ -533,7 +560,6 @@ function reacType( reac, anno, attr ) {
 	if ( anno.getElementsByTagName("moose:ModelAnnotation").length > 0 ) {
 		return [0, id]; // reac
 	}
-	// if (typeof anno.getElementsByTagName("moose:EnzymaticReaction") !== "undefined" ) {
 	if ( anno.getElementsByTagName("moose:EnzymaticReaction").length > 0 ) {
 		if (id.indexOf("_Complex_formation_") != -1) {
 			return [1, id]; // reac1/2 of mass action enzyme
@@ -580,8 +606,8 @@ function parseReacs(xmlDoc) {
 /////////////////////////////////////////////////////////////////////////
 
 function clearAllArrays() {
-	objLookup = {}; // Lengthy stack exchange discussion, here I leave it
-			// to the tender mercies of the garbage collector to clean.
+	objLookup = {}; // Lengthy stack exchange discussion about how to clear
+		// object. I leave it to the tender mercies of garbage collector.
 	centredGroup = "";
 	poolData.length = 0;
 	reacData.length = 0;
@@ -716,32 +742,29 @@ function addEnzToGroup( enz ) {
 }
 
 /////////////////////////////////////////////////////////////////////////
-
-/////////////////////////////////////////////////////////////////////////
 // Making the svg stuff for web page
 /////////////////////////////////////////////////////////////////////////
 	
 function reacLineFunction( x, y ) {
+	var z = textScale;
 	var ret =
-	xScale(x-1).toFixed(2) + "," + yScale(y-0.7).toFixed(2) + " " +
-	xScale(x-1.6).toFixed(2) + "," + yScale(y).toFixed(2) + " " +
-	xScale(x+1.6).toFixed(2) + "," + yScale(y).toFixed(2) + " " +
-	xScale(x+1).toFixed(2) + "," + yScale(y+0.7).toFixed(2);
-	// console.log(ret);
-	// tottxt += ret + "<br>";
+	xScale(x-z).toFixed(2) + "," + yScale(y-0.7*z).toFixed(2) + " " +
+	xScale(x-1.6*z).toFixed(2) + "," + yScale(y).toFixed(2) + " " +
+	xScale(x+1.6*z).toFixed(2) + "," + yScale(y).toFixed(2) + " " +
+	xScale(x+z).toFixed(2) + "," + yScale(y+0.7*z).toFixed(2);
 	return ret;
 }
 
 function enzLineFunction( x, y ) {
+	var z = textScale;
 	var ret =
 	xScale(x).toFixed(2) + "," + yScale(y).toFixed(2) + " " +
-	xScale(x+1).toFixed(2) + "," + yScale(y+0.5).toFixed(2) + " " +
-	xScale(x).toFixed(2) + "," + yScale(y+0.8).toFixed(2) + " " +
-	xScale(x-1.6).toFixed(2) + "," + yScale(y).toFixed(2) + " " +
-	xScale(x).toFixed(2) + "," + yScale(y-0.8).toFixed(2) + " " +
-	xScale(x+1).toFixed(2) + "," + yScale(y-0.5).toFixed(2) + " " +
+	xScale(x+z).toFixed(2) + "," + yScale(y+0.5*z).toFixed(2) + " " +
+	xScale(x).toFixed(2) + "," + yScale(y+0.8*z).toFixed(2) + " " +
+	xScale(x-1.6*z).toFixed(2) + "," + yScale(y).toFixed(2) + " " +
+	xScale(x).toFixed(2) + "," + yScale(y-0.8*z).toFixed(2) + " " +
+	xScale(x+z).toFixed(2) + "," + yScale(y-0.5*z).toFixed(2) + " " +
 	xScale(x).toFixed(2) + "," + yScale(y).toFixed(2);
-	// console.log(ret);
 	return ret;
 }
 
@@ -824,6 +847,12 @@ function doLayout() {
 		} else if (kc == 190) { // period or >, for zooming in
 			wx /= 1.1;
 			wy /= 1.1;
+		} else if (kc == 80) { // p or P, for toggling proxy display.
+			showProxies = !showProxies;
+		} else if (kc == 187) { // + or =, for increasing font size.
+			scaleFontsEtc( 1.1 );
+		} else if (kc == 189) { // - or _, for decreasing font size.
+			scaleFontsEtc( 0.9 );
 		}
 		isZoomedOut = false;
 		setDisplayScales();
@@ -891,6 +920,23 @@ function poolMouseOver( div, d ) {
 		.duration(200)
 		.style("opacity", 0.9);
 	div.html( d.base.name + "<br/>CoInit: " + d.CoInit.toPrecision(3) )
+		.style( "left", (d3.event.pageX) + "px")
+		.style( "top", (d3.event.pageY - 28 ) + "px" );
+}
+
+function enzMouseOver( div, d ) {
+	div.transition()
+		.duration(200)
+		.style("opacity", 0.9);
+	pa = objLookup[ d.enzPool ];
+	var enzPath = "";
+	if ( typeof pa !== "undefined" ) {
+		enzPath = pa.base.name + '/' + d.base.name;
+	} else {
+		enzPath = "?/" + d.base.name;
+	}
+	div.html( enzPath + "<br/>Km= " + d.Km.toPrecision(3) + 
+		"<br/>kcat= " + d.kcat.toPrecision(3) )
 		.style( "left", (d3.event.pageX) + "px")
 		.style( "top", (d3.event.pageY - 28 ) + "px" );
 }
@@ -978,7 +1024,9 @@ function redraw( svgContainer ) {
 		div.transition()
 			.duration(200)
 			.style("opacity", 0.9);
-		div.html( "Kf= " + d.Kf + "<br/>" + "Kb= " + d.Kb )
+		div.html( "Kf= " + d.Kf.toPrecision(3) + 
+			"<br/>Kb = " + d.Kb.toPrecision(3) + 
+			"<br/>" + d.base.name )
 			.style( "left", (d3.event.pageX) + "px")
 			.style( "top", (d3.event.pageY - 28 ) + "px" );
 	} )
@@ -996,25 +1044,10 @@ function redraw( svgContainer ) {
 
   var enzIcons = enz
 	.attr( "points", function(d) {return enzLineFunction( d.base.dispx, d.base.dispy ) } )
-	//.attr( "stroke", function(d) {return d.base.fg} )
 	.attr( "stroke", "black" )
 	.attr( "stroke-width", "1" )
 	.attr( "fill", function(d) {return d.base.fg} )
-	.on( "mouseover", function(d) { 
-		div.transition()
-			.duration(200)
-			.style("opacity", 0.9);
-		pa = objLookup[ d.enzPool ];
-		var enzPath = "";
-		if ( typeof pa !== "undefined" ) {
-			enzPath = pa.base.name + '/' + d.base.name;
-		} else {
-			enzPath = "?/" + d.base.name;
-		}
-		div.html( enzPath + "<br/>Km= " + d.Km.toPrecision(3) + "<br/>kcat= " + d.kcat.toPrecision(3) )
-			.style( "left", (d3.event.pageX) + "px")
-			.style( "top", (d3.event.pageY - 28 ) + "px" );
-	} )
+	.on( "mouseover", function(d) { enzMouseOver( div, d ) } )
 	.on( "mouseout", function(d) {
 		div.transition().duration(500).style( "opacity", 0.0);
 	});
@@ -1029,7 +1062,11 @@ function redraw( svgContainer ) {
 	.attr( "points", function(d) {return enzLineFunction( d.base.dispx, d.base.dispy ) } )
 	.attr( "stroke", function(d) {return d.base.fg} )
 	.attr( "stroke-width", "2" )
-	.attr( "fill", "none" );
+	.attr( "fill", "none" )
+	.on( "mouseover", function(d) { enzMouseOver( div, d ) } )
+	.on( "mouseout", function(d) {
+		div.transition().duration(500).style( "opacity", 0.0);
+	});
 ///////////////////////////////////
 
   var mdata = svgContainer.selectAll( "line" )
@@ -1040,9 +1077,7 @@ function redraw( svgContainer ) {
 	.append("line")
 		.attr( "class", "arrow" )
 		.attr( "stroke", function(d) {return d.fg} )
-		// .attr( "stroke-width", 2 )
 		.attr( "stroke-width", function(d) { return xObjScale(arrowWidth)} )
-		// .attr( "marker-end", "url(#arrow)" )
 		.attr( "marker-end", function(d) {return d.markerURL } )
 		.attr( "x1", function(d) {return xScale(d.calcX0) } )
 		.attr( "y1", function(d) {return yScale(d.y0) } )

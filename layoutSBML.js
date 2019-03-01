@@ -4,7 +4,7 @@
 /////////////////////////////////////////////////////////////////
 
 const pixelWidth = 700;
-const pixelHeight = 600;
+const pixelHeight = 700;
 
 var svgContainer = "";
 var cx = 500.0;
@@ -21,7 +21,9 @@ var arrowWidth = 0.25;
 var textXoffset = 0.3;
 const reacMsgColor = "green";
 const groupFillColor = "cornsilk";
+const groupBorderColor = "blue";
 const groupTextColor = "darkblue";
+const comptFillColor = "palegreen";
 
 
 var objLookup = {};
@@ -33,6 +35,9 @@ var enzData = [];
 var mmEnzData = [];
 var chanData = [];
 var groupData = [];
+var comptData = [];
+var groupPlusComptData = [];
+var funcData = [];
 var msgData = [];
 var poolProxies = [];
 var reacProxies = [];
@@ -107,7 +112,46 @@ function shadeRGBColor(color, percent) {
     var f=color.split(","),t=percent<0?0:255,p=percent<0?percent*-1:percent,R=parseInt(f[0].slice(4)),G=parseInt(f[1]),B=parseInt(f[2]);
     return "rgb("+(Math.round((t-R)*p)+R)+","+(Math.round((t-G)*p)+G)+","+(Math.round((t-B)*p)+B)+")";
 }
+/////////////////////////////////////////////////////////////////
+// Utility access functions that look for a field but return a sensible
+// default if not found.
 
+function annoGetFloat( anno, name, defaultValue ) {
+	var tag = anno.getElementsByTagName( name )
+	if (tag && tag.length > 0) {
+		return parseFloat( tag[0].textContent );
+	}
+	return defaultValue;
+}
+
+function annoGetStr( anno, name, defaultValue ) {
+	var tag = anno.getElementsByTagName( name )
+	if (tag && tag.length > 0) {
+		return tag[0].textContent;
+	}
+	return defaultValue;
+}
+
+function annoGetBool( anno, name, defaultValue ) {
+	var tag = anno.getElementsByTagName( name )
+	if (tag && tag.length > 0) {
+		var val = tag[0].textContent;
+		if (val) {
+			if (val.toLowerCase() == "true" || val != "0") {
+				return true;
+			}
+			return false;
+		}
+	}
+	return defaultValue;
+}
+
+function annoGetManno( anno, name ) {
+	var val = anno.getElementsByTagName( name );
+	return (val && val.length > 0) ? val[0] : "";
+}
+
+/////////////////////////////////////////////////////////////////
 function makeBaseObj( className, xobj, anno, attr, annoName  ) {
 	if ( typeof anno === "undefined") {
 		throw "makeBaseObj failed, annotation not present";
@@ -132,17 +176,10 @@ function makeBaseObj( className, xobj, anno, attr, annoName  ) {
 }
 
 /////////////////////////////////////////////////////////////////
-
-function GroupObj( xgroup, anno, attr ) {
-	var id = attr.getNamedItem( "groups:id" ).nodeValue;
-	var name = attr.getNamedItem( "groups:name" ).nodeValue;
-
-	
-	var manno = anno.getElementsByTagName("moose:GroupAnnotation");
-	this.compartment = manno[0].getElementsByTagName("moose:Compartment")[0].textContent;
-	var bg = manno[0].getElementsByTagName("moose:bgColor")[0].textContent;
-	this.base = new ChemObj( name, "Group", id, convColor(bg, 0.6), "yellow", 0,0, "" );
-	var members = xgroup.getElementsByTagName("groups:member");
+function GroupBase( id, name, compartment, parentObjId, bg, className = "Group" ) {
+	this.compartment = compartment;
+	this.parentObjId = parentObjId;
+	this.base = new ChemObj( name, className, id, convColor(bg, 0.6), "yellow", 0,0, "" );
 	this.width = 10;
 	this.height = 10;
 	this.children = [];
@@ -157,7 +194,7 @@ function GroupObj( xgroup, anno, attr ) {
 		}
 	}
 	this.addEnzChild = function( enzObj ) {
-		this.enzChildren.push( enzObj.base.id )
+		this.enzChildren.push( enzObj.base.id );
 	}
 	this.updateCoords = function() {
 		var k;
@@ -165,6 +202,10 @@ function GroupObj( xgroup, anno, attr ) {
 		var y = [];
 		for (k = 0; k < this.children.length ; k++ ) {
 			var child = objLookup[ this.children[k] ]; 
+			if ( child.base.className == "Group" || child.base.className == "Compt" ) {
+				x.push( child.base.x + child.width );
+				y.push( child.base.y + child.height );
+			} 
 			x.push( child.base.x );
 			y.push( child.base.y );
 		}
@@ -177,12 +218,22 @@ function GroupObj( xgroup, anno, attr ) {
 			this.height = 2 * poolHeight + Math.max( ...y ) - this.base.y;
 		}
 	}
-
-	for (k = 0; k < members.length; k++ ) {
-		var childId = members[k].attributes.getNamedItem( "groups:idRef" ).nodeValue;
-		this.children.push( childId );
+	this.repositionGroup = function() {
+		var dx = this.base.dispx - this.base.x - this.width/2;
+		var dy = this.base.dispy - this.base.y - this.height/2;
+		for (k = 0; k < this.children.length ; k++ ) {
+			var child = objLookup[ this.children[k] ]; 
+			child.base.x += dx;
+			child.base.y += dy;
+		}
+		for (k = 0; k < this.enzChildren.length ; k++ ) {
+			var child = objLookup[ this.enzChildren[k] ]; 
+			child.base.x += dx;
+			child.base.y += dy;
+		}
+		this.updateCoords();
 	}
-	
+
 	this.setOpacity = function( opacity ) {
 		// Even if opacity hasn't changed, child objects may have gained
 		// or lost message links which affect their opacity. So we update
@@ -232,6 +283,23 @@ function GroupObj( xgroup, anno, attr ) {
 	}
 }
 
+function GroupObj( xgroup, anno, attr ) {
+	var id = attr.getNamedItem( "groups:id" ).nodeValue;
+	var name = attr.getNamedItem( "groups:name" ).nodeValue;
+	var manno = anno.getElementsByTagName("moose:GroupAnnotation");
+	var compartment = annoGetStr( manno[0], "moose:Compartment", "" );
+	var parentObjId = annoGetStr( manno[0], "moose:Parent", "" ) + "_";
+	var bg = annoGetStr( manno[0], "moose:bgColor", groupFillColor );
+	var members = xgroup.getElementsByTagName("groups:member");
+
+	GroupBase.call( this, id, name, compartment, parentObjId, bg );
+
+	for (k = 0; k < members.length; k++ ) {
+		var childId = members[k].attributes.getNamedItem( "groups:idRef" ).nodeValue;
+		this.children.push( childId );
+	}
+}
+
 function computeGroupChildLayout( children ) {
 	var j;
 	for ( j = 0; j < children.length; j++ ) {
@@ -249,6 +317,37 @@ function computeGroupChildLayout( children ) {
 			child.base.dispy = child.base.y;
 		}
 	}
+}
+
+/////////////////////////////////////////////////////////
+// Compartments contain other objects, including Groups and Compartments.
+// These are all managed by the ComptObj, which derives from the GroupBase
+//
+/////////////////////////////////////////////////////////
+function ComptObj( xcompt, anno, attr ) {
+	var id = attr.getNamedItem( "id" ).nodeValue;
+	var name = attr.getNamedItem( "name" ).nodeValue;
+	var manno = annoGetManno( anno, "moose:CompartmentAnnotation" );
+	this.shape = annoGetStr( manno, "moose:Mesh", "CubeMesh" );
+	this.isMembraneBound = annoGetBool( manno, "moose:isMembraneBound", true );
+	this.size = parseFloat( attr.getNamedItem("size") );
+	this.spatialDimensions = parseInt( attr.getNamedItem("spatialDimensions") );
+	// var compartment = manno[0].getElementsByTagName("moose:ContainedBy")[0].textContent;
+	// var parentObj = manno[0].getElementsByTagName("moose:Parent")[0].textContent;
+	var bg = annoGetStr( manno, "moose:bgColor", comptFillColor );
+	var compartment = annoGetStr( manno, "moose:compartment", "" );
+	var parentObjId = annoGetStr( manno, "moose:parent", "" );
+	GroupBase.call( this, id, name, compartment, parentObjId, bg, "Compt");
+	
+	this.addchild = function( child ) {
+		this.children.push( child.base.id );
+	}
+}
+
+function assignCompartments() {
+	// Go through all Groups, put them in their Parents which will
+	// either be another group or a Compartment.
+	// Then go through all objects, check if their Parent is defined.
 }
 
 /////////////////////////////////////////////////////////
@@ -435,6 +534,51 @@ function MMEnzObj( xenz, anno, attr, id, enzPool ) {
 	this.Km = this.innerKm * Math.pow( concUnitScale[ concUnits ], this.subs.length );
 }
 
+////////////////////////////////////////////////////////////////////
+function getPoolNameFromId( id ) {
+	s = id.split('_');
+	var i;
+	ret = '';
+	for ( i = 0; i < s.length - 3; i++) {
+		if ( i > 0 ) {
+			ret += '_';
+		}
+		ret += s[i];
+	}
+}
+
+function FuncObj( tgtPool, argList ) {
+	var funcName = getPoolNameFromId( tgtPool ) + "_func";
+	// Later we may have more useful annotations on the Func, and if so we
+	// can fill in more terms from the src SBML file.
+	this.base = new ChemObj( funcName, "Func", tgtPool + "_func", "red", "maroon", 0, 0, "" );
+	this.tgtPool = tgtPool;
+	this.argList = argList;
+	this.func = "Plus"; // Later put in arbitrary expression.
+	
+	this.addMsgs = function() {
+		// Add the msgs for the object, also do first pass assignment of
+		// its coords if these were pending at file load.
+		var msg = new MsgObj( "FuncOutput", this.base.id, this.tgtPool, 1, "blue");
+		msgData.push(msg );
+		var i;
+		for ( i = 0; i < this.argList.length; i++ ) {
+			msg = new MsgObj( "FuncInput", this.argList[i], this.base.id, 1, "blue");
+			msgData.push(msg );
+		}
+		if ( this.base.x == 0 && this.base.y == 0 ) {
+			var tgtObjBase = objLookup[ this.tgtPool ].base;
+			this.base.x = tgtObjBase.x;
+			this.base.y = tgtObjBase.y + 5;
+		}
+	}
+}
+
+/// Utility function for 
+function addMsgs( msg ) {
+	msg.addMsgs();
+}
+
 /////////////////////////////////////////////////////////
 
 function MsgObj( type, src, dest, stoichiometry, fg ) {
@@ -542,6 +686,17 @@ function parseGroups(xmlDoc) {
   }
 }
 
+function parseCompts(xmlDoc) {
+  var compts = xmlDoc.getElementsByTagName("compartment");
+  var i;
+  for (i = 0; i< compts.length; i++) {
+	var anno = compts[i].getElementsByTagName("annotation")
+	if ( anno.length > 0 ) {
+		comptData.push( new ComptObj( compts[i], anno[0], compts[i].attributes ) );
+	}
+  }
+  groupPlusComptData = comptData.concat( groupData );
+}
 
 function parsePools(xmlDoc) {
   var pools = xmlDoc.getElementsByTagName("species");
@@ -551,6 +706,22 @@ function parsePools(xmlDoc) {
 	if ( anno.length > 0 ) {
 		poolData.push( new PoolObj( pools[i], anno[0], pools[i].attributes ) );
 	}
+  }
+}
+
+function parseFuncs(xmlDoc) {
+  var funcs = xmlDoc.getElementsByTagName("assignmentRule");
+  var i;
+  for (i = 0; i < funcs.length; i++) {
+	var tgtPool = funcs[i].attributes.getNamedItem( "variable" ).nodeValue;
+  	var args = funcs[i].getElementsByTagName("ci");
+	var argList = [];
+	var j;
+	for ( j = 0; j < args.length; j++ ) {
+		s = args[j].textContent;
+		argList.push( s.trim() );
+	}
+	funcData.push( new FuncObj( tgtPool, argList ) );
   }
 }
 /////////////////////////////////////////////////////////////////////////
@@ -615,6 +786,7 @@ function clearAllArrays() {
 	mmEnzData.length = 0;
 	chanData.length = 0;
 	groupData.length = 0;
+	comptData.length = 0;
 	msgData.length = 0;
 	poolProxies.length = 0;
 	reacProxies.length = 0;
@@ -650,7 +822,7 @@ function loadXMLDoc() {
 						redraw( svgContainer );
     				}
   				};
-  				xmlhttp.open("GET", fn, true);
+  				xmlhttp.open("GET", "../models/" + fn, true);
   				xmlhttp.send();
 			} else {
 				txt = "Please select an SBML file.";
@@ -668,6 +840,8 @@ function parseSBML(xml) {
   parsePools( xmlDoc );
   parseReacs( xmlDoc );
   parseGroups( xmlDoc );
+  parseCompts( xmlDoc );
+  parseFuncs( xmlDoc );
   txt += "Num Pools = " + poolData.length + "<br>";
   document.getElementById("pools").innerHTML = txt;
   txt = "Num Reacs = " + reacData.length + "<br>";
@@ -676,8 +850,10 @@ function parseSBML(xml) {
   document.getElementById("enz").innerHTML = txt;
   txt = "Num MM Enz = " + mmEnzData.length + "<br>";
   document.getElementById("mmenz").innerHTML = txt;
-  txt = "Num Groups = " + groupData.length + "<br>";
+  txt = "Num Groups = " + groupData.length + ", Num Compts = " + comptData.length + "<br>";
   document.getElementById("groups").innerHTML = txt;
+  txt = "Num Funcs = " + funcData.length + "<br>";
+  document.getElementById("funcs").innerHTML = txt;
   txt = "Num Msgs = " + msgData.length + ", visible = " + msgData.length + "<br>";
   document.getElementById("msgs").innerHTML = txt;
 }
@@ -709,12 +885,41 @@ function addAllObjToLookup() {
 	enzData.forEach( addObjToLookup );
 	mmEnzData.forEach( addObjToLookup );
 	groupData.forEach( addObjToLookup );
+	comptData.forEach( addObjToLookup );
+	funcData.forEach( addObjToLookup );
 	zoomToEntireModel();
 
 	groupData.forEach( assignChildParents );
 	enzData.forEach( addEnzToGroup );
 	mmEnzData.forEach( addEnzToGroup );
+	funcData.forEach( addFuncToGroup );
+	groupData.forEach( assignGroupParents );
+	comptData.forEach( assignGroupParents );
 	groupData.forEach( updateGroupCoords );
+	comptData.forEach( updateGroupCoords );
+	funcData.forEach( addMsgs );
+}
+
+// A bit nasty, N^2 dependence on # of children. Typically under 100 so
+// lets leave for now.
+/*
+function assignGroupParents( obj ) {
+	var pa = obj.base.parentObj;
+	if (!pa.children.includes( obj ))
+		pa.children.push( obj );
+}
+*/
+
+// Here we come in with the parentObj as a string, unless it has already
+// been assigned. In which case we don't need to assign it.
+function assignGroupParents( obj ) {
+	if ( obj.base.parentObj == "" && obj.parentObjId != "" ) {
+		var pa = objLookup[ obj.parentObjId ];
+		if (typeof pa !== "undefined" ) {
+			obj.base.parentObj = pa;
+			pa.children.push( obj.base.id );
+		}
+	}
 }
 
 function addObjToLookup( obj ) {
@@ -741,6 +946,14 @@ function addEnzToGroup( enz ) {
 	enz.base.parentObj.addEnzChild( enz );
 }
 
+function addFuncToGroup( func ) {
+	funcPool = objLookup[func.tgtPool];
+	if ( typeof funcPool === "undefined"  ) {
+			alert( "addFuncToGroup, failed; not in objLookup" );
+	}
+	func.base.parentObj = funcPool.base.parentObj;
+	func.base.parentObj.addEnzChild( func );
+}
 /////////////////////////////////////////////////////////////////////////
 // Making the svg stuff for web page
 /////////////////////////////////////////////////////////////////////////
@@ -748,10 +961,10 @@ function addEnzToGroup( enz ) {
 function reacLineFunction( x, y ) {
 	var z = textScale;
 	var ret =
-	xScale(x-z).toFixed(2) + "," + yScale(y-0.7*z).toFixed(2) + " " +
+	xScale(x-0.8*z).toFixed(2) + "," + yScale(y-z).toFixed(2) + " " +
 	xScale(x-1.6*z).toFixed(2) + "," + yScale(y).toFixed(2) + " " +
 	xScale(x+1.6*z).toFixed(2) + "," + yScale(y).toFixed(2) + " " +
-	xScale(x+z).toFixed(2) + "," + yScale(y+0.7*z).toFixed(2);
+	xScale(x+0.8*z).toFixed(2) + "," + yScale(y+z).toFixed(2);
 	return ret;
 }
 
@@ -767,13 +980,13 @@ function enzLineFunction( x, y ) {
 	xScale(x).toFixed(2) + "," + yScale(y).toFixed(2);
 	return ret;
 }
-
+	
 function zoomVisibility() {
 	var j;
 	var minR = 1e6;
 	var opacity = [];
-	for ( j = 0; j < groupData.length; j++ ) {
-		var grp = groupData[j];
+	for ( j = 0; j < groupPlusComptData.length; j++ ) {
+		var grp = groupPlusComptData[j];
 		var dx = grp.base.x + grp.width/2.0 - cx;
 		var dy = grp.base.y + grp.height/2.0 - cy;
 		var r = Math.sqrt( dx*dx + dy*dy );
@@ -783,15 +996,15 @@ function zoomVisibility() {
 			centredGroup = grp;
 		}
 	}
-	for ( j = 0; j < groupData.length; j++ ) {
-		groupData[j].setOpacity( opacity[j] )
+	for ( j = 0; j < groupPlusComptData.length; j++ ) {
+		groupPlusComptData[j].setOpacity( opacity[j] )
 	}
 	
 	msgData.forEach( function( msg ) { msg.rawTermini()  } );
 	msgData.forEach( function( msg ) { msg.setProxyAndOpacity()  } );
 	poolProxies.length = 0;
 	reacProxies.length = 0;
-	groupData.forEach( function( grp ) { grp.computeProxyLayout() } );
+	groupPlusComptData.forEach( function( grp ) { grp.computeProxyLayout() } );
 	spaceOut( poolProxies );
 	spaceOut( reacProxies );
 }
@@ -822,6 +1035,71 @@ function setDisplayScales() {
 		.range( [ 0, pixelHeight] )
 }
 
+function nozoom() {
+  d3.event.preventDefault();
+}
+
+function invertEventCoords() {
+  x = xScale.invert(d3.event.sourceEvent.pageX);
+  // x = yScale.invert(d3.event.sourceEvent.offsetY);
+  y = yScale.invert(d3.event.sourceEvent.offsetY);
+  return [x, y];
+}
+
+function isGroupOrCompt( obj ) {
+	return ( obj.base.className == "Group" || obj.base.className == "Compt" );
+}
+
+function dragged(d) {
+  var inv = invertEventCoords();
+  if ( !isGroupOrCompt(d) ) {
+  	d.base.x = inv[0];
+  	d.base.y = inv[1];
+  }
+  d.base.dispx = inv[0];
+  d.base.dispy = inv[1];
+  if (d.base.className == "Reac" ) {
+  	d3.select(this).attr( "points", function(d) {return reacLineFunction( d.base.dispx, d.base.dispy ) } );
+  } else if (d.base.className == "Pool" ) {
+  	d3.select(this)
+	  .attr( "x", function(d) {return xScale( d.base.dispx - poolWidth/2)})
+  	  .attr( "y", function(d) {return yScale( d.base.dispy - poolHeight/2) } );
+  } else if (d.base.className == "Enz" || d.base.className == "MMEnz" ) {
+  	d3.select(this).attr( "points", function(d) {return enzLineFunction( d.base.dispx, d.base.dispy ) } );
+  } else if (d.base.className == "Func" ) {
+  	d3.select(this)
+	  .attr( "x", function(d) {return xScale( d.base.dispx ) } )
+  	  .attr( "y", function(d) {return yScale( d.base.dispy - 1 + poolHeight/2) } );
+  } else if (isZoomedOut && isGroupOrCompt( d ) ) {
+  	d3.select(this)
+	.attr( "x", function(d) {return xScale(d.base.dispx - d.width/2)} )
+	.attr( "y", function(d) {return yScale(d.base.dispy + d.height/2)} );
+  }
+}
+
+var drag = d3.behavior.drag()
+  //.origin( function(d) {return {x:d[0], y:d[1]}; } )
+  .on( "drag", dragged )
+  .on( "dragend", function(d) {
+	if ( isZoomedOut && isGroupOrCompt(d) ) {
+		d.repositionGroup();
+	}
+    zoomVisibility();
+	groupPlusComptData.forEach( updateGroupCoords );
+  	var svgContainer = d3.select("body").select("svg");
+	transition( svgContainer );
+  });
+
+function clicked(d, i) {
+  if (d3.event.defaultPrevented) return; // dragged
+  d3.select(this).transition()
+	  .attr( "stroke-width", "10" )
+ 	  // .style( "fill", "black" ) 
+    .transition()
+	  .attr( "stroke-width", "2" )
+	  // .style( "fill", "white" ) // temporary
+}
+
 function doLayout() {
   var svgContainer = d3.select("body")
 	.append("svg")
@@ -831,6 +1109,8 @@ function doLayout() {
 	.style( "background-color", "lightblue");
 
   d3.select("body")
+	.on( "touchstart", nozoom)
+	.on( "touchmove", nozoom)
 	.on("keydown", function() {
 		var kc = d3.event.keyCode;
 		if (kc == 38 ) { // Up arrow
@@ -921,7 +1201,7 @@ function poolMouseOver( div, d ) {
 		.style("opacity", 0.9);
 	div.html( d.base.name + "<br/>CoInit: " + d.CoInit.toPrecision(3) )
 		.style( "left", (d3.event.pageX) + "px")
-		.style( "top", (d3.event.pageY - 28 ) + "px" );
+		.style( "top", (d3.event.pageY - 58 ) + "px" );
 }
 
 function enzMouseOver( div, d ) {
@@ -941,6 +1221,14 @@ function enzMouseOver( div, d ) {
 		.style( "top", (d3.event.pageY - 28 ) + "px" );
 }
 
+function funcMouseOver( div, d ) {
+	div.transition()
+		.duration(200)
+		.style("opacity", 0.9);
+	div.html( d.base.name + "<br/>Func: " + d.func )
+		.style( "left", (d3.event.pageX) + "px")
+		.style( "top", (d3.event.pageY - 28 ) + "px" );
+}
 
 function redraw( svgContainer ) {
   zoomVisibility(); // Update all the object opacity settings.
@@ -949,7 +1237,7 @@ function redraw( svgContainer ) {
 	.style( "opacity", 0);
 
   var gdata = svgContainer.selectAll( ".groups" )
-	.data( groupData )
+	.data( groupPlusComptData )
 
   var group = gdata.enter().append("rect").attr("class", "groups" );
 
@@ -958,10 +1246,12 @@ function redraw( svgContainer ) {
 	.attr( "y", function(d) {return yScale(d.base.dispy + d.height )} )
 	.attr( "width", function(d) { return xObjScale(d.width ) } )
 	.attr( "height", function(d) { return yObjScale(d.height ) } )
-	.attr( "stroke", function(d) {return d.base.fg} )
+	// .attr( "stroke", function(d) {return d.base.fg} )
+	.attr( "stroke", groupBorderColor )
 	.attr( "stroke-width", "2" )
-	.attr( "fill", groupFillColor )
-	.on( "dblclick", function(d) { d.zoomInOut() } );
+	.attr( "fill", function(d) {return d.base.fg} )
+	.on( "dblclick", function(d) { d.zoomInOut() } )
+	.on( "click", clicked).call( drag );
 
   var groupText = gdata.enter().append( "text" )
 	.attr( "class", "groups" )
@@ -992,7 +1282,8 @@ function redraw( svgContainer ) {
 	.on( "mouseover", function(d) { poolMouseOver( div, d ) } )
 	.on( "mouseout", function(d) {
 		div.transition().duration(500).style( "opacity", 0.0);
-	});
+	})
+	.on( "click", clicked).call( drag );
 
   var poolText = pdata.enter().append( "text" )
 	.attr( "class", "pools" )
@@ -1005,12 +1296,13 @@ function redraw( svgContainer ) {
 	.on( "mouseover", function(d) { poolMouseOver( div, d ) } )
 	.on( "mouseout", function(d) {
 		div.transition().duration(500).style( "opacity", 0.0);
-	});
+	})
+	.on( "click", clicked)
+		.call( drag );
 
   pdata.exit().remove();
 
 ///////////////////////////////////
-
   var rdata = svgContainer.selectAll( ".reacs" )
 	.data( reacData )
   var reac = rdata.enter().append("polyline").attr("class", "reacs");
@@ -1019,7 +1311,9 @@ function redraw( svgContainer ) {
 	.attr( "points", function(d) {return reacLineFunction( d.base.dispx, d.base.dispy ) } )
 	.attr( "stroke", function(d) { return d.base.parentObj.base.fg  }  )
 	.attr( "stroke-width", "2" )
-	.attr( "fill", "none" )
+	// .attr( "fill", "none" )
+	.attr( "fill", "cornsilk" )
+	//.attr( "transform", function(d) {return "translate(" + d + ")"; })
 	.on( "mouseover", function(d) { 
 		div.transition()
 			.duration(200)
@@ -1032,7 +1326,9 @@ function redraw( svgContainer ) {
 	} )
 	.on( "mouseout", function(d) {
 		div.transition().duration(500).style( "opacity", 0.0);
-	});
+	})
+	.on( "click", clicked)
+		.call( drag );
 
   rdata.exit().remove();
 ///////////////////////////////////
@@ -1050,7 +1346,8 @@ function redraw( svgContainer ) {
 	.on( "mouseover", function(d) { enzMouseOver( div, d ) } )
 	.on( "mouseout", function(d) {
 		div.transition().duration(500).style( "opacity", 0.0);
-	});
+	})
+	.on( "click", clicked).call( drag );
 ///////////////////////////////////
 
   var medata = svgContainer.selectAll( ".mmenzs" )
@@ -1066,7 +1363,8 @@ function redraw( svgContainer ) {
 	.on( "mouseover", function(d) { enzMouseOver( div, d ) } )
 	.on( "mouseout", function(d) {
 		div.transition().duration(500).style( "opacity", 0.0);
-	});
+	})
+	.on( "click", clicked).call( drag );
 ///////////////////////////////////
 
   var mdata = svgContainer.selectAll( "line" )
@@ -1086,7 +1384,28 @@ function redraw( svgContainer ) {
 		.attr( "opacity", function(d) {return d.opacity} );
 	// Turns out d3 doesn't have a way to change marker color. So we need
 	// separate markers to represent each color. Stupid.
+
+////////////////////////// Funcs //////////////////////////////////////
+  var fdata = svgContainer.selectAll( ".funcs" )
+	.data( funcData )
+
+  var funcIcons = fdata.enter().append("text")
+	.attr("class", "funcs" )
+	.attr( "x", function(d){return xScale(d.base.dispx) } )
+	.attr( "y", function(d) {return yScale(d.base.dispy - 1 + poolHeight/2)} )
+	.attr( "font-family", "sans-serif" )
+	.attr( "font-size", function(d) { return ""+Math.round(xObjScale(textScale))+"px"} )
+	.attr( "fill", function(d){return d.base.textfg} )
+	.text( function(d){return d.func} )
+	.on( "mouseover", function(d) { funcMouseOver( div, d ) } )
+	.on( "mouseout", function(d) {
+		div.transition().duration(500).style( "opacity", 0.0);
+	})
+	.on( "click", clicked).call( drag );
+
+  fdata.exit().remove();
 }
+
 /////////////////////////////////////////////////////////////////////////
 // Here we define the transitions.
 /////////////////////////////////////////////////////////////////////////
@@ -1126,6 +1445,7 @@ function transition( svgContainer ) {
 	.attr( "font-size", function(d) { return ""+Math.round(xObjScale(textScale))+"px"} )
 	.attr( "opacity", function(d) { return d.base.opacity } );
 
+
 	////////////////// reacs /////////////////////////
   var rdata = svgContainer.selectAll( ".reacs" )
   rdata.transition()
@@ -1159,5 +1479,14 @@ function transition( svgContainer ) {
 		.attr( "opacity", function(d) {return d.opacity} )
 		.attr( "stroke-dasharray", function(d) {return d.dasharray} )
 		.attr( "stroke-width", function(d) { return Math.round( xObjScale(arrowWidth) ) } );
-}
 /////////////////////////////////////////////////////////////////////////
+  var fdata = svgContainer.selectAll( "text.funcs" );
+
+  fdata.transition()
+	.duration(300)
+	.attr( "x", function(d){return xScale(d.base.dispx +2 - 0.8 * d.func.length ) } )
+	.attr( "y", function(d) {return yScale(d.base.dispy - 1 + poolHeight/2)} )
+	.attr( "font-size", function(d) { return ""+Math.round(xObjScale(textScale))+"px"} )
+	.attr( "opacity", function(d) { return d.base.opacity } );
+/////////////////////////////////////////////////////////////////////////
+}

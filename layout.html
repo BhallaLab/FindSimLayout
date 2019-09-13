@@ -14,13 +14,21 @@ div.tooltip {
 	pointer-events: none;
 }
 
+svg {
+	position: absolute;
+}
+
+text {
+	pointer-events: none;
+}
+
 </style>
 <html>
 	<head>
-		<script src="http://d3js.org/d3.v2.min.js"></script>
-		<script src="http://d3js.org/d3-color.v1.min.js"></script>
-		<script src="http://d3js.org/d3-interpolate.v1.min.js"></script>
-		<script src="http://d3js.org/d3-scale-chromatic.v1.min.js"></script>
+		<script src="js_downloads/d3.v2.min.js"></script>
+		<script src="js_downloads/d3-color.v1.min.js"></script>
+		<script src="js_downloads/d3-interpolate.v1.min.js"></script>
+		<script src="js_downloads/d3-scale-chromatic.v1.min.js"></script>
 		<style type="text/css">
 		#arrow{
 			stroke-width:1;
@@ -32,20 +40,89 @@ div.tooltip {
 <body>
 <h2> Example to read and display layout of SBML file</h2>
 
-<input class="inputFile" type="file" id="sbmlFile" size="50" onchange="loadXMLDoc()">
-<p id="fname">Select an SBML file</p>
+<input class="inputFile" type="file" id="sbmlFile" size="50" onchange="extLoadXMLDoc()"><br>
 
-<p id="pools">Pool</p>
-<p id="reacs">Reac</p>
-<p id="enz">Enz</p>
-<p id="mmenz">MMEnz</p>
-<p id="groups">Groups</p>
-<p id="funcs">Funcs</p>
-<p id="msgs">Msg</p>
-
+<label> Stimulus: </label>
+<input class="form" type="text" id="Stimulus" size="80" onKeyPress="selectItems(event)"><br>
+<label> Readout: </label>
+<input class="form" type="text" id="Readout" size="80" onKeyPress="selectItems(event)"><br>
+<label> Subset: </label>
+<input class="form" type="text" id="Subset" size="80" onKeyPress="setSubset(event)"><br>
+<label> Delete: </label>
+<input class="form" type="text" id="Delete" size="80" onKeyPress="removeItems(event)"><br>
 <p id="ErrMsg"> Err Msg </p>
+<button onclick="clearSelected()"> Clear All Selections </button > <br>
+<input type="checkbox" id="isZoomedOut" name="isZoomedOut" value="false" onclick="toggleZoom()" >
+<label for="isZoomedOut" style = "background-color: grey"> Zoom in/out </label>
+<input type = "checkbox" id="showProxies" name = "showProxies" value = "false" onclick="toggleProxies()">
+<label for="showProxies"> Show Proxies </label>
+<input type = "checkbox" id="autoPositionDisplay" name = "autoPositionDisplay" value = "false"  onclick="toggleAutoPositionDisplay()">
+<label for="autoPositionDisplay"> Auto position </label>
+<input type = "checkbox" id="positionEnzWithParent" name = "positionEnzWithParent" value = "false"  onclick="togglePositionEnzWithParent()">
+<label for="positionEnzWithParent"> Enzymes with parent </label>
+<p>
 
-<script type="text/javascript" src="layoutSBML.js"> </script>
+<script type="text/javascript" src="lwidget.js"> </script>
+<script>
+
+function errorCallback( msg ) {
+	document.getElementById("ErrMsg").innerHTML = msg;
+}
+
+function extLoadXMLDoc() {
+	apiSetErrorCallback( errorCallback );
+	var fobj = document.getElementById("sbmlFile");
+	if ( 'files' in fobj ) {
+		if (fobj.files.length > 0) {
+			var fn = "models/" + fobj.files[0].name;
+			loadXMLDoc( fn );
+		}
+	}
+}
+
+function selectItems( event ) {
+	if (event.keyCode == 13) {
+		apiSelect( event.srcElement.value );
+		document.getElementById("ErrMsg").innerHTML = "Selected: " + event.srcElement.value;
+	}
+}
+
+function setSubset( event ) {
+	if (event.keyCode == 13) {
+		apiSetSubset( event.srcElement.value );
+		document.getElementById("ErrMsg").innerHTML = "Subset: " + event.srcElement.value;
+	}
+}
+
+function removeItems( event ) {
+	if (event.keyCode == 13) {
+		apiRemoveItems( event.srcElement.value );
+		document.getElementById("ErrMsg").innerHTML = "Removed: " + event.srcElement.value;
+	}
+}
+
+function clearSelected() {
+	apiClearSelected();
+}
+
+function toggleZoom() {
+	// Stupid Javascript doesn't pass the state.
+	apiSetZoom( document.getElementById("isZoomedOut").checked );
+}
+
+function toggleProxies() {
+	apiSetProxies( document.getElementById("showProxies").checked );
+}
+
+function toggleAutoPositionDisplay() {
+	apiSetAutoPositionDisplay( document.getElementById("autoPositionDisplay").checked );
+}
+
+function togglePositionEnzWithParent() {
+	apiSetPositionEnzWithParent( document.getElementById("positionEnzWithParent").checked );
+}
+
+</script>
 
 </body>
 <html>
